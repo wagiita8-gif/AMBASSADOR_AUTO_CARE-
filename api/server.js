@@ -35,16 +35,19 @@ app.get("/api/health", async (req, res) => {
       status: "healthy",
       database: "connected"
     });
-  } catch (error) {
-    console.error("Database connection failed");
+    } catch (error) {
+    console.error(
+      "Database connection failed:",
+      error.message,
+      error.code
+    );
 
     res.status(503).json({
       status: "unavailable",
       database: "disconnected"
     });
+  
   }
-});
-
 // Verify authentication token
 function authenticateToken(req, res, next) {
   const authHeader = req.headers.authorization;
