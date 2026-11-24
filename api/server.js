@@ -994,6 +994,102 @@ app.post(
     }
   }
 );
+// UPDATE PRODUCT DETAILS
+app.patch(
+  "/api/shops/:shopId/products/:productId",
+  authenticateToken,
+  requireShopRole(["owner", "manager"]),
+  async (req, res) => {
+    const { shopId, productId } = req.params;
+    const { sku, name, sellingPrice } = req.body;
+
+    const updates = [];
+    const values = [];
+    let index = 1;
+
+    if (sku !== undefined) {
+      if (typeof sku !== "string" || !sku.trim()) {
+        return res.status(400).json({
+          error: "SKU must be a non-empty string"
+        });
+      }
+
+      updates.push(`sku = $${index++}`);
+      values.push(sku.trim());
+    }
+
+    if (name !== undefined) {
+      if (typeof name !== "string" || !name.trim()) {
+        return res.status(400).json({
+          error: "Name must be a non-empty string"
+        });
+      }
+
+      updates.push(`name = $${index++}`);
+      values.push(name.trim());
+    }
+
+    if (sellingPrice !== undefined) {
+      if (
+        typeof sellingPrice !== "number" ||
+        !Number.isFinite(sellingPrice) ||
+        sellingPrice <= 0
+      ) {
+        return res.status(400).json({
+          error: "Selling price must be greater than zero"
+        });
+      }
+
+      updates.push(`selling_price = $${index++}`);
+      values.push(sellingPrice);
+    }
+
+    if (updates.length === 0) {
+      return res.status(400).json({
+        error: "Provide at least one field to update"
+      });
+    }
+
+    values.push(productId, shopId);
+
+    try {
+      const result = await pool.query(
+        `UPDATE products
+         SET ${updates.join(", ")},
+             updated_at = NOW()
+         WHERE id = $${index++}
+           AND shop_id = $${index}
+         RETURNING id, sku, name, selling_price,
+                   quantity, updated_at`,
+        values
+      );
+
+      if (result.rows.length === 0) {
+        return res.status(404).json({
+          error: "Product not found"
+        });
+      }
+
+      return res.status(200).json({
+        message: "Product updated successfully",
+        product: result.rows[0]
+      });
+
+    } catch (error) {
+      if (error.code === "23505") {
+        return res.status(409).json({
+          error: "A product with this SKU already exists"
+        });
+      }
+
+      console.error("Product update error:", error);
+
+      return res.status(500).json({
+        error: "Failed to update product"
+      });
+    }
+  }
+);
 // --------------------------------------------------
 // SERVER START
 // --------------------------------------------------
