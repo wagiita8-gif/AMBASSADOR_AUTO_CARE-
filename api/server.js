@@ -48,6 +48,7 @@ app.get("/api/health", async (req, res) => {
     });
   
   }
+});
 // Verify authentication token
 function authenticateToken(req, res, next) {
   const authHeader = req.headers.authorization;
