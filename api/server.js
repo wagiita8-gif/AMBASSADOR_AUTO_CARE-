@@ -772,6 +772,107 @@ app.post(
     }
   }
 );
+// RECORD PHYSICAL STOCK COUNT
+app.post(
+  "/api/shops/:shopId/products/:productId/stock-count",
+  authenticateToken,
+  requireShopRole(["owner", "manager", "staff"]),
+  async (req, res) => {
+    const { shopId, productId } = req.params;
+    const { physicalQuantity, reason } = req.body;
+
+    if (
+      !Number.isSafeInteger(physicalQuantity) ||
+      physicalQuantity < 0
+    ) {
+      return res.status(400).json({
+        error: "Physical quantity must be a non-negative integer"
+      });
+    }
+
+    if (
+      typeof reason !== "string" ||
+      reason.trim() === ""
+    ) {
+      return res.status(400).json({
+        error: "A reason for the stock count is required"
+      });
+    }
+
+    const client = await pool.connect();
+
+    try {
+      await client.query("BEGIN");
+
+      const productResult = await client.query(
+        `SELECT id, name, quantity
+         FROM products
+         WHERE id = $1 AND shop_id = $2
+         FOR UPDATE`,
+        [productId, shopId]
+      );
+
+      if (productResult.rows.length === 0) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({
+          error: "Product not found"
+        });
+      }
+
+      const product = productResult.rows[0];
+      const systemQuantity = Number(product.quantity);
+      const difference = physicalQuantity - systemQuantity;
+
+      await client.query(
+        `UPDATE products
+         SET quantity = $1
+         WHERE id = $2 AND shop_id = $3`,
+        [physicalQuantity, productId, shopId]
+      );
+
+      const adjustmentResult = await client.query(
+        `INSERT INTO stock_adjustments (
+          shop_id,
+          product_id,
+          user_id,
+          system_quantity,
+          physical_quantity,
+          reason
+        )
+        VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING id, system_quantity, physical_quantity,
+                  difference, reason, created_at`,
+        [
+          shopId,
+          productId,
+          req.user.userId,
+          systemQuantity,
+          physicalQuantity,
+          reason.trim()
+        ]
+      );
+
+      await client.query("COMMIT");
+
+      return res.status(201).json({
+        message: "Physical stock count recorded successfully",
+        product: product.name,
+        adjustment: adjustmentResult.rows[0]
+      });
+
+    } catch (error) {
+      await client.query("ROLLBACK");
+      console.error("Stock count error:", error);
+
+      return res.status(500).json({
+        error: "Failed to record physical stock count"
+      });
+
+    } finally {
+      client.release();
+    }
+  }
+);
 // --------------------------------------------------
 // SERVER START
 // --------------------------------------------------
