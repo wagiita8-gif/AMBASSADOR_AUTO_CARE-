@@ -442,6 +442,101 @@ app.post("/api/auth/login", async (req, res) => {
   }
 });
 
+ // --------------------------------------------------
+ // CREATE SHOP STAFF
+ // --------------------------------------------------
+
+app.post(
+  "/api/shops/:shopId/staff",
+  authenticateToken,
+  requireShopRole(["owner", "manager"]),
+  async (req, res) => {
+    let client;
+    let transactionStarted = false;
+
+    try {
+      const { email, password, role } = req.body;
+
+      // Validate input
+      if (
+        typeof email !== "string" ||
+        typeof password !== "string" ||
+        !isValidEmail(email) ||
+        password.length < 12 ||
+        !["manager", "staff"].includes(role)
+      ) {
+        return res.status(400).json({
+          error: "Valid email, password and role required"
+        });
+      }
+
+      // Managers can only create staff
+      if (req.shopRole === "manager" && role !== "staff") {
+        return res.status(403).json({
+          error: "Managers can only create staff accounts"
+        });
+      }
+
+      const normalizedEmail = normalizeEmail(email);
+
+      client = await pool.connect();
+
+      await client.query("BEGIN");
+      transactionStarted = true;
+
+      // Create user account
+      const passwordHash = await bcrypt.hash(password, 12);
+
+      const user = await client.query(
+        `INSERT INTO users (email, password_hash)
+         VALUES ($1, $2)
+         RETURNING id, email`,
+        [normalizedEmail, passwordHash]
+      );
+
+      // Assign user to shop
+      await client.query(
+        `INSERT INTO shop_users (shop_id, user_id, role)
+         VALUES ($1, $2, $3)`,
+        [req.params.shopId, user.rows[0].id, role]
+      );
+
+      await client.query("COMMIT");
+      transactionStarted = false;
+
+      return res.status(201).json({
+        message: "Staff account created successfully",
+        user: user.rows[0],
+        role
+      });
+
+    } catch (error) {
+      console.error("Staff creation failed:", error.message, error.code);
+
+      if (client && transactionStarted) {
+        try {
+          await client.query("ROLLBACK");
+        } catch (rollbackError) {
+          console.error("Rollback failed:", rollbackError.message);
+        }
+      }
+
+      if (error.code === "23505") {
+        return res.status(409).json({
+          error: "This email is already registered"
+        });
+      }
+
+      return res.status(500).json({
+        error: "Staff account creation failed"
+      });
+
+    } finally {
+      if (client) client.release();
+    }
+  }
+);
+
 // --------------------------------------------------
 // SERVER START
 // --------------------------------------------------
