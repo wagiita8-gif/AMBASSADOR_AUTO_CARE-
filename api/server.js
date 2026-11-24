@@ -652,7 +652,126 @@ app.post(
     }
   }
 );
-      
+  // RECORD PRODUCT SALE
+app.post(
+  "/api/shops/:shopId/products/:productId/sale",
+  authenticateToken,
+  requireShopRole(["owner", "manager", "staff"]),
+  async (req, res) => {
+    const { shopId, productId } = req.params;
+    const { quantity, notes } = req.body;
+
+    if (
+      !Number.isSafeInteger(quantity) ||
+      quantity <= 0
+    ) {
+      return res.status(400).json({
+        error: "Quantity must be a positive integer"
+      });
+    }
+
+    if (notes !== undefined && typeof notes !== "string") {
+      return res.status(400).json({
+        error: "Notes must be text"
+      });
+    }
+
+    const client = await pool.connect();
+
+    try {
+      await client.query("BEGIN");
+
+      // Lock product while processing sale
+      const productResult = await client.query(
+        `SELECT id, name, quantity, selling_price
+         FROM products
+         WHERE id = $1 AND shop_id = $2
+         FOR UPDATE`,
+        [productId, shopId]
+      );
+
+      if (productResult.rows.length === 0) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({
+          error: "Product not found"
+        });
+      }
+
+      const product = productResult.rows[0];
+
+      if (Number(product.quantity) < quantity) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({
+          error: "Insufficient stock",
+          available: Number(product.quantity),
+          requested: quantity
+        });
+      }
+
+      const unitPrice = Number(product.selling_price);
+
+      if (!Number.isFinite(unitPrice) || unitPrice <= 0) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({
+          error: "Invalid product selling price"
+        });
+      }
+
+      const updateResult = await client.query(
+        `UPDATE products
+         SET quantity = quantity - $1
+         WHERE id = $2 AND shop_id = $3
+         RETURNING id, name, quantity, selling_price`,
+        [quantity, productId, shopId]
+      );
+
+      await client.query(
+        `INSERT INTO stock_movements (
+          shop_id,
+          product_id,
+          user_id,
+          movement_type,
+          quantity,
+          unit_price,
+          notes
+        )
+        VALUES ($1, $2, $3, 'sale', $4, $5, $6)`,
+        [
+          shopId,
+          productId,
+          req.user.userId,
+          quantity,
+          unitPrice,
+          notes || null
+        ]
+      );
+
+      await client.query("COMMIT");
+
+      return res.status(201).json({
+        message: "Sale recorded successfully",
+        sale: {
+          product: updateResult.rows[0].name,
+          quantitySold: quantity,
+          unitPrice,
+          total: Number((unitPrice * quantity).toFixed(2)),
+          remainingStock: Number(updateResult.rows[0].quantity)
+        }
+      });
+
+    } catch (error) {
+      await client.query("ROLLBACK");
+      console.error("Sale error:", error);
+
+      return res.status(500).json({
+        error: "Failed to record sale"
+      });
+
+    } finally {
+      client.release();
+    }
+  }
+);
 // --------------------------------------------------
 // SERVER START
 // --------------------------------------------------
