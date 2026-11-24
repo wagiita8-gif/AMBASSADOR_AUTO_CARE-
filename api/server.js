@@ -68,6 +68,36 @@ function authenticateToken(req, res, next) {
     next();
   });
 }
+// Verify shop membership
+async function requireShopRole(req, res, next) {
+  try {
+    const { shopId } = req.params;
+
+    const result = await pool.query(
+      `SELECT role
+       FROM shop_users
+       WHERE user_id = $1
+       AND shop_id = $2`,
+      [req.user.userId, shopId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(403).json({
+        error: "You do not have access to this shop"
+      });
+    }
+
+    req.shopRole = result.rows[0].role;
+    next();
+
+  } catch (error) {
+    console.error("Shop authorization failed");
+
+    res.status(500).json({
+      error: "Authorization failed"
+    });
+  }
+  }
 // Register user
 app.post("/api/auth/register", async (req, res) => {
   try {
