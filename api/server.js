@@ -6,19 +6,139 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 
 const app = express();
+const PORT = process.env.PORT || 3000;
+
+// --------------------------------------------------
+// MIDDLEWARE
+// --------------------------------------------------
 
 app.use(express.json());
 
-app.use(cors({
-  origin: process.env.FRONTEND_ORIGIN || false
-}));
+app.use(
+  cors({
+    origin: process.env.FRONTEND_ORIGIN || false
+  })
+);
+
+// --------------------------------------------------
+// DATABASE CONNECTION
+// --------------------------------------------------
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: true }
+  ssl: {
+    rejectUnauthorized: true
+  }
 });
 
-// Check API
+// --------------------------------------------------
+// HELPER FUNCTIONS
+// --------------------------------------------------
+
+function normalizeEmail(email) {
+  return email.trim().toLowerCase();
+}
+
+function isValidEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function createToken(userId) {
+  if (!process.env.JWT_SECRET) {
+    throw new Error("JWT_SECRET is not configured");
+  }
+
+  return jwt.sign(
+    { userId },
+    process.env.JWT_SECRET,
+    { expiresIn: "2h" }
+  );
+}
+
+// --------------------------------------------------
+// AUTHENTICATION MIDDLEWARE
+// --------------------------------------------------
+
+function authenticateToken(req, res, next) {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).json({
+      error: "Authentication token required"
+    });
+  }
+
+  const token = authHeader.split(" ")[1];
+
+  if (!process.env.JWT_SECRET) {
+    return res.status(500).json({
+      error: "Authentication is not configured"
+    });
+  }
+
+  jwt.verify(token, process.env.JWT_SECRET, (error, decoded) => {
+    if (error) {
+      return res.status(403).json({
+        error: "Invalid or expired token"
+      });
+    }
+
+    req.user = decoded;
+    next();
+  });
+}
+
+// --------------------------------------------------
+// SHOP ROLE MIDDLEWARE
+// --------------------------------------------------
+
+function requireShopRole(allowedRoles = []) {
+  return async (req, res, next) => {
+    try {
+      const { shopId } = req.params;
+
+      const result = await pool.query(
+        `SELECT role
+         FROM shop_users
+         WHERE user_id = $1
+         AND shop_id = $2`,
+        [req.user.userId, shopId]
+      );
+
+      if (result.rows.length === 0) {
+        return res.status(403).json({
+          error: "You do not belong to this shop"
+        });
+      }
+
+      const userRole = result.rows[0].role;
+
+      if (
+        allowedRoles.length > 0 &&
+        !allowedRoles.includes(userRole)
+      ) {
+        return res.status(403).json({
+          error: "Insufficient permissions"
+        });
+      }
+
+      req.shopRole = userRole;
+      next();
+
+    } catch (error) {
+      console.error("Shop role check failed:", error.message);
+
+      return res.status(500).json({
+        error: "Unable to verify shop permissions"
+      });
+    }
+  };
+}
+
+// --------------------------------------------------
+// API HOME
+// --------------------------------------------------
+
 app.get("/", (req, res) => {
   res.json({
     status: "online",
@@ -26,7 +146,10 @@ app.get("/", (req, res) => {
   });
 });
 
-// Check database
+// --------------------------------------------------
+// DATABASE HEALTH CHECK
+// --------------------------------------------------
+
 app.get("/api/health", async (req, res) => {
   try {
     await pool.query("SELECT 1");
@@ -35,9 +158,10 @@ app.get("/api/health", async (req, res) => {
       status: "healthy",
       database: "connected"
     });
-    } catch (error) {
+
+  } catch (error) {
     console.error(
-      "Database connection failed:",
+      "Health check failed:",
       error.message,
       error.code
     );
@@ -46,98 +170,63 @@ app.get("/api/health", async (req, res) => {
       status: "unavailable",
       database: "disconnected"
     });
-  
   }
 });
-// Verify authentication token
-function authenticateToken(req, res, next) {
-  const authHeader = req.headers.authorization;
 
-  const token = authHeader && authHeader.split(" ")[1];
+// --------------------------------------------------
+// ONE-TIME SHOP OWNER SETUP
+// --------------------------------------------------
 
-  if (!token) {
-    return res.status(401).json({
-      error: "Access token required"
-    });
-  }
-
-  jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
-    if (err) {
-      return res.status(403).json({
-        error: "Invalid or expired token"
-      });
-    }
-
-    req.user = user;
-    next();
-  });
-}
-// Verify shop membership
-async function requireShopRole(req, res, next) {
-  try {
-    const { shopId } = req.params;
-
-    const result = await pool.query(
-      `SELECT role
-       FROM shop_users
-       WHERE user_id = $1
-       AND shop_id = $2`,
-      [req.user.userId, shopId]
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(403).json({
-        error: "You do not have access to this shop"
-      });
-    }
-
-    req.shopRole = result.rows[0].role;
-    next();
-
-  } catch (error) {
-    console.error("Shop authorization failed");
-
-    res.status(500).json({
-      error: "Authorization failed"
-    });
-  }
-  }
-
-// One-time shop owner setup
 app.post("/api/auth/setup-owner", async (req, res) => {
-  const client = await pool.connect();
+  let client;
+  let transactionStarted = false;
 
   try {
     const { email, password, setupSecret } = req.body;
 
+    // Validate input
     if (
-      !email ||
-      !password ||
-      password.length < 12 ||
-      !setupSecret
+      typeof email !== "string" ||
+      typeof password !== "string" ||
+      typeof setupSecret !== "string" ||
+      !isValidEmail(email) ||
+      password.length < 12
     ) {
       return res.status(400).json({
-        error: "Valid email, password and setup secret required"
+        error: "Valid email, password (at least 12 characters), and setup secret required"
       });
     }
 
+    // Check environment configuration
     if (!process.env.OWNER_SETUP_SECRET) {
       return res.status(500).json({
         error: "Owner setup is not configured"
       });
     }
 
+    if (!process.env.JWT_SECRET) {
+      return res.status(500).json({
+        error: "Authentication is not configured"
+      });
+    }
+
+    // Verify setup secret
     if (setupSecret !== process.env.OWNER_SETUP_SECRET) {
       return res.status(403).json({
         error: "Invalid setup secret"
       });
     }
 
-    await client.query("BEGIN");
+    // Connect to database
+    client = await pool.connect();
 
-    // Lock shop row so simultaneous setup requests cannot both succeed
+    await client.query("BEGIN");
+    transactionStarted = true;
+
+    // Lock the shop row during owner setup
     const shop = await client.query(
-      `SELECT id FROM shops
+      `SELECT id
+       FROM shops
        WHERE id = $1
        FOR UPDATE`,
       ["fe94ff4e-e3a8-4fb4-88a1-3a1f0eeef824"]
@@ -145,28 +234,38 @@ app.post("/api/auth/setup-owner", async (req, res) => {
 
     if (shop.rows.length === 0) {
       await client.query("ROLLBACK");
+      transactionStarted = false;
+
       return res.status(404).json({
         error: "Shop not found"
       });
     }
 
+    const shopId = shop.rows[0].id;
+
+    // Check whether an owner already exists
     const existingOwner = await client.query(
-      `SELECT id FROM shop_users
-       WHERE shop_id = $1 AND role = 'owner'`,
-      [shop.rows[0].id]
+      `SELECT id
+       FROM shop_users
+       WHERE shop_id = $1
+       AND role = 'owner'`,
+      [shopId]
     );
 
     if (existingOwner.rows.length > 0) {
       await client.query("ROLLBACK");
+      transactionStarted = false;
+
       return res.status(409).json({
         error: "Owner setup has already been completed"
       });
     }
 
-    const normalizedEmail = email.trim().toLowerCase();
-
+    // Prepare account details
+    const normalizedEmail = normalizeEmail(email);
     const passwordHash = await bcrypt.hash(password, 12);
 
+    // Create user
     const user = await client.query(
       `INSERT INTO users (email, password_hash)
        VALUES ($1, $2)
@@ -174,63 +273,80 @@ app.post("/api/auth/setup-owner", async (req, res) => {
       [normalizedEmail, passwordHash]
     );
 
+    // Assign owner role
     await client.query(
       `INSERT INTO shop_users (shop_id, user_id, role)
        VALUES ($1, $2, 'owner')`,
-      [shop.rows[0].id, user.rows[0].id]
+      [shopId, user.rows[0].id]
     );
 
+    // Save transaction
     await client.query("COMMIT");
+    transactionStarted = false;
 
-    res.status(201).json({
+    const token = createToken(user.rows[0].id);
+
+    return res.status(201).json({
       message: "Shop owner created successfully",
-      user: user.rows[0]
+      user: user.rows[0],
+      token
     });
 
   } catch (error) {
-    await client.query("ROLLBACK");
+    console.error(
+      "Owner setup failed:",
+      error.message,
+      error.code
+    );
 
-    console.error("Owner setup failed");
+    if (client && transactionStarted) {
+      try {
+        await client.query("ROLLBACK");
+      } catch (rollbackError) {
+        console.error(
+          "Rollback failed:",
+          rollbackError.message
+        );
+      }
+    }
 
-    res.status(500).json({
+    if (error.code === "23505") {
+      return res.status(409).json({
+        error: "An account with this email already exists"
+      });
+    }
+
+    return res.status(500).json({
       error: "Owner setup failed"
     });
 
   } finally {
-    client.release();
+    if (client) {
+      client.release();
+    }
   }
 });
 
-// Register user
+// --------------------------------------------------
+// USER REGISTRATION
+// --------------------------------------------------
+
 app.post("/api/auth/register", async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    if (!email || !password || password.length < 12) {
+    if (
+      typeof email !== "string" ||
+      typeof password !== "string" ||
+      !isValidEmail(email) ||
+      password.length < 12
+    ) {
       return res.status(400).json({
-        error: "Valid email and password of at least 12 characters required"
+        error: "Valid email and password (at least 12 characters) required"
       });
     }
 
-    if (!process.env.JWT_SECRET) {
-      return res.status(500).json({
-        error: "Server configuration error"
-      });
-    }
-
-    const normalizedEmail = email.trim().toLowerCase();
-
-    const existing = await pool.query(
-      "SELECT id FROM users WHERE email = $1",
-      [normalizedEmail]
-    );
-
-    if (existing.rows.length > 0) {
-      return res.status(409).json({
-        error: "Email already registered"
-      });
-    }
-
+    const normalizedEmail = normalizeEmail(email);
     const passwordHash = await bcrypt.hash(password, 12);
 
     const result = await pool.query(
@@ -240,36 +356,51 @@ app.post("/api/auth/register", async (req, res) => {
       [normalizedEmail, passwordHash]
     );
 
-    res.status(201).json({
+    return res.status(201).json({
       message: "User registered successfully",
       user: result.rows[0]
     });
 
   } catch (error) {
-    console.error("Registration failed");
+    console.error("Registration failed:", error.message);
 
-    res.status(500).json({
+    if (error.code === "23505") {
+      return res.status(409).json({
+        error: "Email is already registered"
+      });
+    }
+
+    return res.status(500).json({
       error: "Registration failed"
     });
   }
 });
 
-// Login user
+// --------------------------------------------------
+// USER LOGIN
+// --------------------------------------------------
+
 app.post("/api/auth/login", async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    if (!email || !password) {
+    if (
+      typeof email !== "string" ||
+      typeof password !== "string" ||
+      !isValidEmail(email)
+    ) {
       return res.status(400).json({
-        error: "Email and password required"
+        error: "Valid email and password required"
       });
     }
+
+    const normalizedEmail = normalizeEmail(email);
 
     const result = await pool.query(
       `SELECT id, email, password_hash
        FROM users
        WHERE email = $1`,
-      [email.trim().toLowerCase()]
+      [normalizedEmail]
     );
 
     if (result.rows.length === 0) {
@@ -280,44 +411,56 @@ app.post("/api/auth/login", async (req, res) => {
 
     const user = result.rows[0];
 
-    const validPassword = await bcrypt.compare(
+    const passwordMatches = await bcrypt.compare(
       password,
       user.password_hash
     );
 
-    if (!validPassword) {
+    if (!passwordMatches) {
       return res.status(401).json({
         error: "Invalid email or password"
       });
     }
 
-    const token = jwt.sign(
-      { userId: user.id },
-      process.env.JWT_SECRET,
-      { expiresIn: "2h" }
-    );
+    const token = createToken(user.id);
 
-    res.json({
+    return res.json({
       message: "Login successful",
-      token,
       user: {
         id: user.id,
         email: user.email
-      }
+      },
+      token
     });
 
   } catch (error) {
-    console.error("Login failed");
+    console.error("Login failed:", error.message);
 
-    res.status(500).json({
+    return res.status(500).json({
       error: "Login failed"
     });
   }
 });
 
-const PORT = process.env.PORT || 3000;
+// --------------------------------------------------
+// SERVER START
+// --------------------------------------------------
 
 app.listen(PORT, () => {
-  console.log(`API running on port ${PORT}`);
+  console.log(
+    `Ambassadors Auto Care API running on port ${PORT}`
+  );
 });
-      
+
+// --------------------------------------------------
+// GRACEFUL SHUTDOWN
+// --------------------------------------------------
+
+process.on("SIGTERM", async () => {
+  console.log("Shutting down API...");
+
+  await pool.end();
+
+  process.exit(0);
+});
+    
