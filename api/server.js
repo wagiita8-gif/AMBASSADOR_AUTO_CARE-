@@ -1090,6 +1090,90 @@ app.patch(
     }
   }
 );
+// DELETE PRODUCT
+app.delete(
+  "/api/shops/:shopId/products/:productId",
+  authenticateToken,
+  requireShopRole(["owner", "manager"]),
+  async (req, res) => {
+    const { shopId, productId } = req.params;
+
+    const client = await pool.connect();
+
+    try {
+      await client.query("BEGIN");
+
+      const productResult = await client.query(
+        `SELECT id, sku, name, quantity
+         FROM products
+         WHERE id = $1 AND shop_id = $2
+         FOR UPDATE`,
+        [productId, shopId]
+      );
+
+      if (productResult.rows.length === 0) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({
+          error: "Product not found"
+        });
+      }
+
+      const movementCheck = await client.query(
+        `SELECT 1
+         FROM stock_movements
+         WHERE product_id = $1
+         LIMIT 1`,
+        [productId]
+      );
+
+      const adjustmentCheck = await client.query(
+        `SELECT 1
+         FROM stock_adjustments
+         WHERE product_id = $1
+         LIMIT 1`,
+        [productId]
+      );
+
+      if (
+        movementCheck.rows.length > 0 ||
+        adjustmentCheck.rows.length > 0
+      ) {
+        await client.query("ROLLBACK");
+
+        return res.status(409).json({
+          error: "Product has transaction history and cannot be deleted",
+          suggestion: "Archive the product instead"
+        });
+      }
+
+      const product = productResult.rows[0];
+
+      await client.query(
+        `DELETE FROM products
+         WHERE id = $1 AND shop_id = $2`,
+        [productId, shopId]
+      );
+
+      await client.query("COMMIT");
+
+      return res.status(200).json({
+        message: "Product deleted successfully",
+        product
+      });
+
+    } catch (error) {
+      await client.query("ROLLBACK");
+      console.error("Product deletion error:", error);
+
+      return res.status(500).json({
+        error: "Failed to delete product"
+      });
+
+    } finally {
+      client.release();
+    }
+  }
+);
 // --------------------------------------------------
 // SERVER START
 // --------------------------------------------------
