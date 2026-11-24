@@ -98,6 +98,105 @@ async function requireShopRole(req, res, next) {
     });
   }
   }
+
+// One-time shop owner setup
+app.post("/api/auth/setup-owner", async (req, res) => {
+  const client = await pool.connect();
+
+  try {
+    const { email, password, setupSecret } = req.body;
+
+    if (
+      !email ||
+      !password ||
+      password.length < 12 ||
+      !setupSecret
+    ) {
+      return res.status(400).json({
+        error: "Valid email, password and setup secret required"
+      });
+    }
+
+    if (!process.env.OWNER_SETUP_SECRET) {
+      return res.status(500).json({
+        error: "Owner setup is not configured"
+      });
+    }
+
+    if (setupSecret !== process.env.OWNER_SETUP_SECRET) {
+      return res.status(403).json({
+        error: "Invalid setup secret"
+      });
+    }
+
+    await client.query("BEGIN");
+
+    // Lock shop row so simultaneous setup requests cannot both succeed
+    const shop = await client.query(
+      `SELECT id FROM shops
+       WHERE id = $1
+       FOR UPDATE`,
+      ["fe94ff4e-e3a8-4fb4-88a1-3a1f0eeef824"]
+    );
+
+    if (shop.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({
+        error: "Shop not found"
+      });
+    }
+
+    const existingOwner = await client.query(
+      `SELECT id FROM shop_users
+       WHERE shop_id = $1 AND role = 'owner'`,
+      [shop.rows[0].id]
+    );
+
+    if (existingOwner.rows.length > 0) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({
+        error: "Owner setup has already been completed"
+      });
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+
+    const passwordHash = await bcrypt.hash(password, 12);
+
+    const user = await client.query(
+      `INSERT INTO users (email, password_hash)
+       VALUES ($1, $2)
+       RETURNING id, email`,
+      [normalizedEmail, passwordHash]
+    );
+
+    await client.query(
+      `INSERT INTO shop_users (shop_id, user_id, role)
+       VALUES ($1, $2, 'owner')`,
+      [shop.rows[0].id, user.rows[0].id]
+    );
+
+    await client.query("COMMIT");
+
+    res.status(201).json({
+      message: "Shop owner created successfully",
+      user: user.rows[0]
+    });
+
+  } catch (error) {
+    await client.query("ROLLBACK");
+
+    console.error("Owner setup failed");
+
+    res.status(500).json({
+      error: "Owner setup failed"
+    });
+
+  } finally {
+    client.release();
+  }
+});
+
 // Register user
 app.post("/api/auth/register", async (req, res) => {
   try {
