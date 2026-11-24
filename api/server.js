@@ -537,6 +537,122 @@ app.post(
   }
 );
 
+ // --------------------------------------------------
+ // RECORD PURCHASED STOCK
+ // --------------------------------------------------
+
+app.post(
+  "/api/shops/:shopId/products/:productId/purchase",
+  authenticateToken,
+  requireShopRole(["owner", "manager", "staff"]),
+  async (req, res) => {
+    let client;
+    let transactionStarted = false;
+
+    try {
+      const { shopId, productId } = req.params;
+      const { quantity, unitCost, supplierName, notes } = req.body;
+
+      if (
+        !Number.isSafeInteger(quantity) ||
+        quantity <= 0 ||
+        typeof unitCost !== "number" ||
+        !Number.isFinite(unitCost) ||
+        unitCost <= 0 ||
+        typeof supplierName !== "string" ||
+        !supplierName.trim()
+      ) {
+        return res.status(400).json({
+          error: "Valid quantity, purchase cost and supplier name required"
+        });
+      }
+
+      client = await pool.connect();
+
+      await client.query("BEGIN");
+      transactionStarted = true;
+
+      // Lock product while updating stock
+      const product = await client.query(
+        `SELECT id, name, quantity
+         FROM products
+         WHERE id = $1 AND shop_id = $2
+         FOR UPDATE`,
+        [productId, shopId]
+      );
+
+      if (product.rows.length === 0) {
+        await client.query("ROLLBACK");
+        transactionStarted = false;
+
+        return res.status(404).json({
+          error: "Product not found"
+        });
+      }
+
+      // Increase inventory
+      const updatedProduct = await client.query(
+        `UPDATE products
+         SET quantity = quantity + $1
+         WHERE id = $2 AND shop_id = $3
+         RETURNING id, name, quantity`,
+        [quantity, productId, shopId]
+      );
+
+      // Record purchase history
+      await client.query(
+        `INSERT INTO stock_movements (
+          shop_id,
+          product_id,
+          user_id,
+          movement_type,
+          quantity,
+          unit_cost,
+          supplier_name,
+          notes
+        )
+        VALUES ($1, $2, $3, 'purchase', $4, $5, $6, $7)`,
+        [
+          shopId,
+          productId,
+          req.user.userId,
+          quantity,
+          unitCost,
+          supplierName.trim(),
+          typeof notes === "string" ? notes.trim() || null : null
+        ]
+      );
+
+      await client.query("COMMIT");
+      transactionStarted = false;
+
+      return res.status(201).json({
+        message: "Purchased stock recorded successfully",
+        product: updatedProduct.rows[0],
+        quantityAdded: quantity
+      });
+
+    } catch (error) {
+      console.error("Purchase recording failed:", error.message);
+
+      if (client && transactionStarted) {
+        try {
+          await client.query("ROLLBACK");
+        } catch (rollbackError) {
+          console.error("Rollback failed:", rollbackError.message);
+        }
+      }
+
+      return res.status(500).json({
+        error: "Unable to record purchased stock"
+      });
+
+    } finally {
+      if (client) client.release();
+    }
+  }
+);
+      
 // --------------------------------------------------
 // SERVER START
 // --------------------------------------------------
