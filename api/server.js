@@ -912,6 +912,88 @@ app.get(
     }
   }
 );
+// CREATE NEW PRODUCT
+app.post(
+  "/api/shops/:shopId/products",
+  authenticateToken,
+  requireShopRole(["owner", "manager"]),
+  async (req, res) => {
+    const { shopId } = req.params;
+    const { sku, name, sellingPrice, quantity } = req.body;
+
+    if (
+      typeof sku !== "string" ||
+      !sku.trim() ||
+      typeof name !== "string" ||
+      !name.trim()
+    ) {
+      return res.status(400).json({
+        error: "SKU and product name are required"
+      });
+    }
+
+    if (
+      typeof sellingPrice !== "number" ||
+      !Number.isFinite(sellingPrice) ||
+      sellingPrice <= 0
+    ) {
+      return res.status(400).json({
+        error: "Selling price must be greater than zero"
+      });
+    }
+
+    const initialQuantity = quantity === undefined ? 0 : quantity;
+
+    if (
+      !Number.isSafeInteger(initialQuantity) ||
+      initialQuantity < 0
+    ) {
+      return res.status(400).json({
+        error: "Quantity must be a non-negative integer"
+      });
+    }
+
+    try {
+      const result = await pool.query(
+        `INSERT INTO products (
+          shop_id,
+          sku,
+          name,
+          selling_price,
+          quantity
+        )
+        VALUES ($1, $2, $3, $4, $5)
+        RETURNING id, sku, name, selling_price,
+                  quantity, created_at, updated_at`,
+        [
+          shopId,
+          sku.trim(),
+          name.trim(),
+          sellingPrice,
+          initialQuantity
+        ]
+      );
+
+      return res.status(201).json({
+        message: "Product created successfully",
+        product: result.rows[0]
+      });
+
+    } catch (error) {
+      if (error.code === "23505") {
+        return res.status(409).json({
+          error: "A product with this SKU already exists"
+        });
+      }
+
+      console.error("Product creation error:", error);
+
+      return res.status(500).json({
+        error: "Failed to create product"
+      });
+    }
+  }
+);
 // --------------------------------------------------
 // SERVER START
 // --------------------------------------------------
