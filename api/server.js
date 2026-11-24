@@ -229,7 +229,7 @@ app.post("/api/auth/setup-owner", async (req, res) => {
        FROM shops
        WHERE id = $1
        FOR UPDATE`,
-      ["fe94ff4e-e3a8-4fb4-88a1-3a1f0eeef824"]
+      ["fe94ff4e-e3a8-4fb4-88a1-3a1fc0eeef824"]
     );
 
     if (shop.rows.length === 0) {
