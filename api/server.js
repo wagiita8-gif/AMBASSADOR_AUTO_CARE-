@@ -873,6 +873,45 @@ app.post(
     }
   }
 );
+// GET SHOP INVENTORY
+app.get(
+  "/api/shops/:shopId/products",
+  authenticateToken,
+  requireShopRole(["owner", "manager", "staff"]),
+  async (req, res) => {
+    const { shopId } = req.params;
+
+    try {
+      const result = await pool.query(
+        `SELECT
+           id,
+           sku,
+           name,
+           selling_price,
+           quantity,
+           created_at,
+           updated_at
+         FROM products
+         WHERE shop_id = $1
+         ORDER BY name ASC`,
+        [shopId]
+      );
+
+      return res.status(200).json({
+        message: "Inventory retrieved successfully",
+        count: result.rows.length,
+        products: result.rows
+      });
+
+    } catch (error) {
+      console.error("Inventory error:", error);
+
+      return res.status(500).json({
+        error: "Failed to retrieve inventory"
+      });
+    }
+  }
+);
 // --------------------------------------------------
 // SERVER START
 // --------------------------------------------------
