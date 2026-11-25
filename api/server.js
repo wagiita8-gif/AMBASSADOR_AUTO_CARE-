@@ -77,7 +77,11 @@ function authenticateToken(req, res, next) {
   }
 
   jwt.verify(token, process.env.JWT_SECRET, (error, decoded) => {
-    if (error) {
+    if (
+      error ||
+      !decoded ||
+      typeof decoded.userId !== "string"
+    ) {
       return res.status(403).json({
         error: "Invalid or expired token"
       });
@@ -184,7 +188,6 @@ app.post("/api/auth/setup-owner", async (req, res) => {
   try {
     const { email, password, setupSecret } = req.body;
 
-    // Validate input
     if (
       typeof email !== "string" ||
       typeof password !== "string" ||
@@ -197,7 +200,6 @@ app.post("/api/auth/setup-owner", async (req, res) => {
       });
     }
 
-    // Check environment configuration
     if (!process.env.OWNER_SETUP_SECRET) {
       return res.status(500).json({
         error: "Owner setup is not configured"
@@ -210,20 +212,17 @@ app.post("/api/auth/setup-owner", async (req, res) => {
       });
     }
 
-    // Verify setup secret
     if (setupSecret !== process.env.OWNER_SETUP_SECRET) {
       return res.status(403).json({
         error: "Invalid setup secret"
       });
     }
 
-    // Connect to database
     client = await pool.connect();
 
     await client.query("BEGIN");
     transactionStarted = true;
 
-    // Lock the shop row during owner setup
     const shop = await client.query(
       `SELECT id
        FROM shops
@@ -243,7 +242,6 @@ app.post("/api/auth/setup-owner", async (req, res) => {
 
     const shopId = shop.rows[0].id;
 
-    // Check whether an owner already exists
     const existingOwner = await client.query(
       `SELECT id
        FROM shop_users
@@ -261,11 +259,9 @@ app.post("/api/auth/setup-owner", async (req, res) => {
       });
     }
 
-    // Prepare account details
     const normalizedEmail = normalizeEmail(email);
     const passwordHash = await bcrypt.hash(password, 12);
 
-    // Create user
     const user = await client.query(
       `INSERT INTO users (email, password_hash)
        VALUES ($1, $2)
@@ -273,14 +269,12 @@ app.post("/api/auth/setup-owner", async (req, res) => {
       [normalizedEmail, passwordHash]
     );
 
-    // Assign owner role
     await client.query(
       `INSERT INTO shop_users (shop_id, user_id, role)
        VALUES ($1, $2, 'owner')`,
       [shopId, user.rows[0].id]
     );
 
-    // Save transaction
     await client.query("COMMIT");
     transactionStarted = false;
 
@@ -303,10 +297,7 @@ app.post("/api/auth/setup-owner", async (req, res) => {
       try {
         await client.query("ROLLBACK");
       } catch (rollbackError) {
-        console.error(
-          "Rollback failed:",
-          rollbackError.message
-        );
+        console.error("Rollback failed:", rollbackError.message);
       }
     }
 
@@ -324,55 +315,6 @@ app.post("/api/auth/setup-owner", async (req, res) => {
     if (client) {
       client.release();
     }
-  }
-});
-
-// --------------------------------------------------
-// USER REGISTRATION
-// --------------------------------------------------
-
-app.post("/api/auth/register", async (req, res) => {
-  try {
-    const { email, password } = req.body;
-
-    if (
-      typeof email !== "string" ||
-      typeof password !== "string" ||
-      !isValidEmail(email) ||
-      password.length < 12
-    ) {
-      return res.status(400).json({
-        error: "Valid email and password (at least 12 characters) required"
-      });
-    }
-
-    const normalizedEmail = normalizeEmail(email);
-    const passwordHash = await bcrypt.hash(password, 12);
-
-    const result = await pool.query(
-      `INSERT INTO users (email, password_hash)
-       VALUES ($1, $2)
-       RETURNING id, email`,
-      [normalizedEmail, passwordHash]
-    );
-
-    return res.status(201).json({
-      message: "User registered successfully",
-      user: result.rows[0]
-    });
-
-  } catch (error) {
-    console.error("Registration failed:", error.message);
-
-    if (error.code === "23505") {
-      return res.status(409).json({
-        error: "Email is already registered"
-      });
-    }
-
-    return res.status(500).json({
-      error: "Registration failed"
-    });
   }
 });
 
@@ -442,9 +384,9 @@ app.post("/api/auth/login", async (req, res) => {
   }
 });
 
- // --------------------------------------------------
- // CREATE SHOP STAFF
- // --------------------------------------------------
+// --------------------------------------------------
+// CREATE SHOP STAFF
+// --------------------------------------------------
 
 app.post(
   "/api/shops/:shopId/staff",
@@ -457,7 +399,6 @@ app.post(
     try {
       const { email, password, role } = req.body;
 
-      // Validate input
       if (
         typeof email !== "string" ||
         typeof password !== "string" ||
@@ -470,7 +411,6 @@ app.post(
         });
       }
 
-      // Managers can only create staff
       if (req.shopRole === "manager" && role !== "staff") {
         return res.status(403).json({
           error: "Managers can only create staff accounts"
@@ -484,7 +424,6 @@ app.post(
       await client.query("BEGIN");
       transactionStarted = true;
 
-      // Create user account
       const passwordHash = await bcrypt.hash(password, 12);
 
       const user = await client.query(
@@ -494,7 +433,6 @@ app.post(
         [normalizedEmail, passwordHash]
       );
 
-      // Assign user to shop
       await client.query(
         `INSERT INTO shop_users (shop_id, user_id, role)
          VALUES ($1, $2, $3)`,
@@ -511,7 +449,11 @@ app.post(
       });
 
     } catch (error) {
-      console.error("Staff creation failed:", error.message, error.code);
+      console.error(
+        "Staff creation failed:",
+        error.message,
+        error.code
+      );
 
       if (client && transactionStarted) {
         try {
@@ -532,14 +474,16 @@ app.post(
       });
 
     } finally {
-      if (client) client.release();
+      if (client) {
+        client.release();
+      }
     }
   }
 );
 
- // --------------------------------------------------
- // RECORD PURCHASED STOCK
- // --------------------------------------------------
+// --------------------------------------------------
+// RECORD PURCHASED STOCK
+// --------------------------------------------------
 
 app.post(
   "/api/shops/:shopId/products/:productId/purchase",
@@ -560,7 +504,11 @@ app.post(
         !Number.isFinite(unitCost) ||
         unitCost <= 0 ||
         typeof supplierName !== "string" ||
-        !supplierName.trim()
+        !supplierName.trim() ||
+        (
+          notes !== undefined &&
+          typeof notes !== "string"
+        )
       ) {
         return res.status(400).json({
           error: "Valid quantity, purchase cost and supplier name required"
@@ -572,7 +520,6 @@ app.post(
       await client.query("BEGIN");
       transactionStarted = true;
 
-      // Lock product while updating stock
       const product = await client.query(
         `SELECT id, name, quantity
          FROM products
@@ -590,7 +537,6 @@ app.post(
         });
       }
 
-      // Increase inventory
       const updatedProduct = await client.query(
         `UPDATE products
          SET quantity = quantity + $1
@@ -599,7 +545,6 @@ app.post(
         [quantity, productId, shopId]
       );
 
-      // Record purchase history
       await client.query(
         `INSERT INTO stock_movements (
           shop_id,
@@ -648,40 +593,52 @@ app.post(
       });
 
     } finally {
-      if (client) client.release();
+      if (client) {
+        client.release();
+      }
     }
   }
 );
-  // RECORD PRODUCT SALE
+
+// --------------------------------------------------
+// RECORD PRODUCT SALE
+// --------------------------------------------------
+
 app.post(
   "/api/shops/:shopId/products/:productId/sale",
   authenticateToken,
   requireShopRole(["owner", "manager", "staff"]),
   async (req, res) => {
-    const { shopId, productId } = req.params;
-    const { quantity, notes } = req.body;
-
-    if (
-      !Number.isSafeInteger(quantity) ||
-      quantity <= 0
-    ) {
-      return res.status(400).json({
-        error: "Quantity must be a positive integer"
-      });
-    }
-
-    if (notes !== undefined && typeof notes !== "string") {
-      return res.status(400).json({
-        error: "Notes must be text"
-      });
-    }
-
-    const client = await pool.connect();
+    let client;
+    let transactionStarted = false;
 
     try {
-      await client.query("BEGIN");
+      const { shopId, productId } = req.params;
+      const { quantity, notes } = req.body;
 
-      // Lock product while processing sale
+      if (
+        !Number.isSafeInteger(quantity) ||
+        quantity <= 0
+      ) {
+        return res.status(400).json({
+          error: "Quantity must be a positive integer"
+        });
+      }
+
+      if (
+        notes !== undefined &&
+        typeof notes !== "string"
+      ) {
+        return res.status(400).json({
+          error: "Notes must be text"
+        });
+      }
+
+      client = await pool.connect();
+
+      await client.query("BEGIN");
+      transactionStarted = true;
+
       const productResult = await client.query(
         `SELECT id, name, quantity, selling_price
          FROM products
@@ -692,6 +649,8 @@ app.post(
 
       if (productResult.rows.length === 0) {
         await client.query("ROLLBACK");
+        transactionStarted = false;
+
         return res.status(404).json({
           error: "Product not found"
         });
@@ -701,6 +660,8 @@ app.post(
 
       if (Number(product.quantity) < quantity) {
         await client.query("ROLLBACK");
+        transactionStarted = false;
+
         return res.status(400).json({
           error: "Insufficient stock",
           available: Number(product.quantity),
@@ -712,6 +673,8 @@ app.post(
 
       if (!Number.isFinite(unitPrice) || unitPrice <= 0) {
         await client.query("ROLLBACK");
+        transactionStarted = false;
+
         return res.status(400).json({
           error: "Invalid product selling price"
         });
@@ -742,11 +705,12 @@ app.post(
           req.user.userId,
           quantity,
           unitPrice,
-          notes || null
+          notes ? notes.trim() || null : null
         ]
       );
 
       await client.query("COMMIT");
+      transactionStarted = false;
 
       return res.status(201).json({
         message: "Sale recorded successfully",
@@ -760,49 +724,66 @@ app.post(
       });
 
     } catch (error) {
-      await client.query("ROLLBACK");
-      console.error("Sale error:", error);
+      console.error("Sale error:", error.message);
+
+      if (client && transactionStarted) {
+        try {
+          await client.query("ROLLBACK");
+        } catch (rollbackError) {
+          console.error("Rollback failed:", rollbackError.message);
+        }
+      }
 
       return res.status(500).json({
         error: "Failed to record sale"
       });
 
     } finally {
-      client.release();
+      if (client) {
+        client.release();
+      }
     }
   }
 );
+
+// --------------------------------------------------
 // RECORD PHYSICAL STOCK COUNT
+// --------------------------------------------------
+
 app.post(
   "/api/shops/:shopId/products/:productId/stock-count",
   authenticateToken,
   requireShopRole(["owner", "manager", "staff"]),
   async (req, res) => {
-    const { shopId, productId } = req.params;
-    const { physicalQuantity, reason } = req.body;
-
-    if (
-      !Number.isSafeInteger(physicalQuantity) ||
-      physicalQuantity < 0
-    ) {
-      return res.status(400).json({
-        error: "Physical quantity must be a non-negative integer"
-      });
-    }
-
-    if (
-      typeof reason !== "string" ||
-      reason.trim() === ""
-    ) {
-      return res.status(400).json({
-        error: "A reason for the stock count is required"
-      });
-    }
-
-    const client = await pool.connect();
+    let client;
+    let transactionStarted = false;
 
     try {
+      const { shopId, productId } = req.params;
+      const { physicalQuantity, reason } = req.body;
+
+      if (
+        !Number.isSafeInteger(physicalQuantity) ||
+        physicalQuantity < 0
+      ) {
+        return res.status(400).json({
+          error: "Physical quantity must be a non-negative integer"
+        });
+      }
+
+      if (
+        typeof reason !== "string" ||
+        reason.trim() === ""
+      ) {
+        return res.status(400).json({
+          error: "A reason for the stock count is required"
+        });
+      }
+
+      client = await pool.connect();
+
       await client.query("BEGIN");
+      transactionStarted = true;
 
       const productResult = await client.query(
         `SELECT id, name, quantity
@@ -814,6 +795,8 @@ app.post(
 
       if (productResult.rows.length === 0) {
         await client.query("ROLLBACK");
+        transactionStarted = false;
+
         return res.status(404).json({
           error: "Product not found"
         });
@@ -821,7 +804,6 @@ app.post(
 
       const product = productResult.rows[0];
       const systemQuantity = Number(product.quantity);
-      const difference = physicalQuantity - systemQuantity;
 
       await client.query(
         `UPDATE products
@@ -853,6 +835,7 @@ app.post(
       );
 
       await client.query("COMMIT");
+      transactionStarted = false;
 
       return res.status(201).json({
         message: "Physical stock count recorded successfully",
@@ -861,19 +844,32 @@ app.post(
       });
 
     } catch (error) {
-      await client.query("ROLLBACK");
-      console.error("Stock count error:", error);
+      console.error("Stock count error:", error.message);
+
+      if (client && transactionStarted) {
+        try {
+          await client.query("ROLLBACK");
+        } catch (rollbackError) {
+          console.error("Rollback failed:", rollbackError.message);
+        }
+      }
 
       return res.status(500).json({
         error: "Failed to record physical stock count"
       });
 
     } finally {
-      client.release();
+      if (client) {
+        client.release();
+      }
     }
   }
 );
+
+// --------------------------------------------------
 // GET SHOP INVENTORY
+// --------------------------------------------------
+
 app.get(
   "/api/shops/:shopId/products",
   authenticateToken,
@@ -904,7 +900,7 @@ app.get(
       });
 
     } catch (error) {
-      console.error("Inventory error:", error);
+      console.error("Inventory error:", error.message);
 
       return res.status(500).json({
         error: "Failed to retrieve inventory"
@@ -912,7 +908,11 @@ app.get(
     }
   }
 );
+
+// --------------------------------------------------
 // CREATE NEW PRODUCT
+// --------------------------------------------------
+
 app.post(
   "/api/shops/:shopId/products",
   authenticateToken,
@@ -986,7 +986,7 @@ app.post(
         });
       }
 
-      console.error("Product creation error:", error);
+      console.error("Product creation error:", error.message);
 
       return res.status(500).json({
         error: "Failed to create product"
@@ -994,7 +994,11 @@ app.post(
     }
   }
 );
+
+// --------------------------------------------------
 // UPDATE PRODUCT DETAILS
+// --------------------------------------------------
+
 app.patch(
   "/api/shops/:shopId/products/:productId",
   authenticateToken,
@@ -1082,7 +1086,7 @@ app.patch(
         });
       }
 
-      console.error("Product update error:", error);
+      console.error("Product update error:", error.message);
 
       return res.status(500).json({
         error: "Failed to update product"
@@ -1090,18 +1094,26 @@ app.patch(
     }
   }
 );
+
+// --------------------------------------------------
 // DELETE PRODUCT
+// --------------------------------------------------
+
 app.delete(
   "/api/shops/:shopId/products/:productId",
   authenticateToken,
   requireShopRole(["owner", "manager"]),
   async (req, res) => {
-    const { shopId, productId } = req.params;
-
-    const client = await pool.connect();
+    let client;
+    let transactionStarted = false;
 
     try {
+      const { shopId, productId } = req.params;
+
+      client = await pool.connect();
+
       await client.query("BEGIN");
+      transactionStarted = true;
 
       const productResult = await client.query(
         `SELECT id, sku, name, quantity
@@ -1113,6 +1125,8 @@ app.delete(
 
       if (productResult.rows.length === 0) {
         await client.query("ROLLBACK");
+        transactionStarted = false;
+
         return res.status(404).json({
           error: "Product not found"
         });
@@ -1139,6 +1153,7 @@ app.delete(
         adjustmentCheck.rows.length > 0
       ) {
         await client.query("ROLLBACK");
+        transactionStarted = false;
 
         return res.status(409).json({
           error: "Product has transaction history and cannot be deleted",
@@ -1155,6 +1170,7 @@ app.delete(
       );
 
       await client.query("COMMIT");
+      transactionStarted = false;
 
       return res.status(200).json({
         message: "Product deleted successfully",
@@ -1162,18 +1178,28 @@ app.delete(
       });
 
     } catch (error) {
-      await client.query("ROLLBACK");
-      console.error("Product deletion error:", error);
+      console.error("Product deletion error:", error.message);
+
+      if (client && transactionStarted) {
+        try {
+          await client.query("ROLLBACK");
+        } catch (rollbackError) {
+          console.error("Rollback failed:", rollbackError.message);
+        }
+      }
 
       return res.status(500).json({
         error: "Failed to delete product"
       });
 
     } finally {
-      client.release();
+      if (client) {
+        client.release();
+      }
     }
   }
 );
+
 // --------------------------------------------------
 // SERVER START
 // --------------------------------------------------
@@ -1195,4 +1221,3 @@ process.on("SIGTERM", async () => {
 
   process.exit(0);
 });
-    
