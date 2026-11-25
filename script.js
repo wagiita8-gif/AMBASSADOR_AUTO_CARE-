@@ -649,6 +649,7 @@ async function cloudRequest(path, options = {}) {
   return data;
 }
 
+
 async function loadCloudParties() {
   if (!getAuth()) return false;
 
@@ -658,7 +659,15 @@ async function loadCloudParties() {
       cloudRequest('suppliers')
     ]);
 
-    db.customers = (customerData.customers || []).map(c => ({
+    const localCustomers = db.customers.filter(
+      c => c.localOnly === true || String(c.id).startsWith('x')
+    );
+
+    const localSuppliers = db.suppliers.filter(
+      s => s.localOnly === true || String(s.id).startsWith('x')
+    );
+
+    const cloudCustomers = (customerData.customers || []).map(c => ({
       id: c.id,
       name: c.name,
       phone: c.phone || '',
@@ -668,7 +677,7 @@ async function loadCloudParties() {
       localOnly: false
     }));
 
-    db.suppliers = (supplierData.suppliers || []).map(s => ({
+    const cloudSuppliers = (supplierData.suppliers || []).map(s => ({
       id: s.id,
       name: s.name,
       phone: s.phone || '',
@@ -677,6 +686,9 @@ async function loadCloudParties() {
       notes: s.notes || '',
       localOnly: false
     }));
+
+    db.customers = [...cloudCustomers, ...localCustomers];
+    db.suppliers = [...cloudSuppliers, ...localSuppliers];
 
     save();
     return true;
@@ -687,7 +699,6 @@ async function loadCloudParties() {
     return false;
   }
 }
-
 // ADD SUPPLIER
 function supplierForm() {
   openModal('Add supplier', [
