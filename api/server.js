@@ -1199,7 +1199,50 @@ app.delete(
     }
   }
 );
+// --------------------------------------------------
+// AUTHENTICATED SESSION
+// --------------------------------------------------
 
+app.get(
+  "/api/auth/session",
+  authenticateToken,
+  async (req, res) => {
+    try {
+      const result = await pool.query(
+        `SELECT
+           su.shop_id,
+           su.role,
+           s.name AS shop_name
+         FROM shop_users su
+         INNER JOIN shops s ON s.id = su.shop_id
+         WHERE su.user_id = $1
+         ORDER BY su.created_at ASC`,
+        [req.user.userId]
+      );
+
+      if (result.rows.length === 0) {
+        return res.status(403).json({
+          error: "This account is not assigned to a shop"
+        });
+      }
+
+      return res.status(200).json({
+        message: "Session verified",
+        user: {
+          id: req.user.userId
+        },
+        shops: result.rows
+      });
+
+    } catch (error) {
+      console.error("Session verification failed:", error.message);
+
+      return res.status(500).json({
+        error: "Unable to verify session"
+      });
+    }
+  }
+);
 // --------------------------------------------------
 // SERVER START
 // --------------------------------------------------
