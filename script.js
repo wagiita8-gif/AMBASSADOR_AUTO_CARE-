@@ -374,7 +374,9 @@ document.addEventListener('click', e => {
 // --------------------------------------------------
 // MODALS
 // --------------------------------------------------
-
+function closeModal() {
+  $('modalBack').classList.remove('open');
+}
 function openModal(title, fields, onSave) {
   $('modalTitle').textContent = title;
 
