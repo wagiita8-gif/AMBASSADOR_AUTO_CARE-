@@ -65,6 +65,10 @@ async function loadCloudProducts() {
     toast('Could not load cloud products.');
   }
 }
+document.addEventListener(
+  'pos:authenticated',
+  loadCloudProducts
+);
 const titles={home:'Dashboard',products:'Products',sales:'Sales & Checkout',inventory:'Inventory',suppliers:'Suppliers',purchases:'Purchases',customers:'Customers & Credit',expenses:'Expenses & Charges',cash:'Cash Register',reports:'Reports',settings:'Settings'};
 const $=id=>document.getElementById(id);
 const money=n=>'KSh '+Number(n||0).toLocaleString('en-KE',{minimumFractionDigits:2,maximumFractionDigits:2});
