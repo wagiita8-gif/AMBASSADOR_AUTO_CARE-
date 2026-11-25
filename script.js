@@ -326,45 +326,73 @@ document.addEventListener('click', e => {
 // MODALS
 // --------------------------------------------------
 
-
 function openModal(title, fields, onSave) {
   $('modalTitle').textContent = title;
 
   $('modalFields').innerHTML = fields.map(f => {
-    if (f.type === 'textarea') {
-      return `
-        <label>${f.label}</label>
+    let control;
+
+    if (f.type === 'select') {
+      control = `
+        <select name="${f.name}" ${f.required ? 'required' : ''}>
+          ${(f.options || []).map(o => {
+            const value = typeof o === 'object' ? o.value : o;
+            const label = typeof o === 'object' ? o.label : o;
+
+            return `
+              <option
+                value="${esc(value)}"
+                ${String(value) === String(f.value ?? '') ? 'selected' : ''}
+              >
+                ${esc(label)}
+              </option>
+            `;
+          }).join('')}
+        </select>
+      `;
+    } else if (f.type === 'textarea') {
+      control = `
         <textarea
           name="${f.name}"
-          placeholder="${f.placeholder || ''}"
+          rows="3"
+          placeholder="${esc(f.placeholder || '')}"
           ${f.required ? 'required' : ''}
-        >${f.value || ''}</textarea>
+        >${esc(f.value ?? '')}</textarea>
+      `;
+    } else {
+      control = `
+        <input
+          name="${f.name}"
+          type="${f.type || 'text'}"
+          ${f.min !== undefined ? `min="${f.min}"` : ''}
+          ${f.step ? `step="${f.step}"` : ''}
+          value="${esc(f.value ?? '')}"
+          placeholder="${esc(f.placeholder || '')}"
+          ${f.required ? 'required' : ''}
+        >
       `;
     }
 
     return `
-      <label>${f.label}</label>
-      <input
-        type="${f.type || 'text'}"
-        name="${f.name}"
-        placeholder="${f.placeholder || ''}"
-        value="${f.value || ''}"
-        ${f.required ? 'required' : ''}
-      >
+      <label class="${f.wide ? 'wide' : ''}">
+        ${esc(f.label)}
+        ${control}
+      </label>
     `;
   }).join('');
 
-  $('modal').classList.add('open');
+  $('modalBack').classList.add('open');
 
   $('modalForm').onsubmit = async e => {
     e.preventDefault();
 
-    const submit = $('modalForm').querySelector('[type="submit"]');
+    const form = e.target;
+    const submit = form.querySelector('[type="submit"]');
 
     if (submit) submit.disabled = true;
 
     try {
-      const d = Object.fromEntries(new FormData(e.target));
+      const d = Object.fromEntries(new FormData(form));
       const result = await onSave(d);
 
       if (result !== false) {
@@ -378,6 +406,7 @@ function openModal(title, fields, onSave) {
     }
   };
 }
+
 // --------------------------------------------------
 // PRODUCTS
 // --------------------------------------------------
