@@ -593,49 +593,57 @@ function makeSku(name) {
 
   return prefix + '-' + Math.random().toString(36).slice(2,7).toUpperCase();
 }
-
-function deleteProduct(id) {
-  if (!confirm('Remove this product from the local catalogue? Sale history remains.')) return;
-
-  db.products = db.products.filter(p => p.id !== id);
-  save();
-  toast('Product removed locally.');
-}
-
-function adjustStock(id) {
+async function deleteProduct(id) {
   const p = db.products.find(x => x.id === id);
   if (!p) return;
 
-  openModal('Physical stock count — ' + p.name, [
-    {name:'counted',label:'Actual counted quantity',type:'number',min:0,step:'.001',value:p.stock,required:true},
-    {name:'reason',label:'Reason',type:'select',options:['Physical count','Damaged','Expired','Missing','Found','Correction']},
-    {name:'notes',label:'Notes',type:'textarea',wide:true}
-  ], d => {
-    const n = Number(d.counted);
+  if (!confirm(`Remove "${p.name}" from the product catalogue?`)) return;
 
-    if (!Number.isFinite(n) || n < 0) {
-      toast('Enter a valid count.');
-      return false;
+  // Older local-only products have non-UUID IDs.
+  const isCloudId =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+
+  if (!isCloudId) {
+    db.products = db.products.filter(x => x.id !== id);
+    save();
+    render();
+    toast('Local product removed.');
+    return;
+  }
+
+  try {
+    const auth = getAuth();
+    if (!auth) throw new Error('Please sign in first.');
+
+    const response = await fetch(
+      `${API_BASE}/api/shops/${auth.shopId}/products/${id}`,
+      {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${auth.token}`,
+          Accept: 'application/json'
+        }
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || 'Product deletion failed.');
     }
 
-    const before = p.stock;
-    p.stock = n;
-
-    (db.adjustments || (db.adjustments = [])).push({
-      id:uid(),
-      productId:id,
-      before,
-      after:n,
-      difference:n-before,
-      reason:d.reason,
-      notes:d.notes,
-      date:new Date().toISOString()
-    });
-
+    db.products = db.products.filter(x => x.id !== id);
     save();
-    toast('Stock count saved locally.');
-  });
+
+    await loadCloudProducts(true);
+    render();
+    toast('Product deleted from cloud.');
+  } catch (error) {
+    toast(error.message || 'Could not delete product.');
+  }
 }
+function deleteProduct(id) {
+
 
 // --------------------------------------------------
 // PRODUCT SUPPLIERS
