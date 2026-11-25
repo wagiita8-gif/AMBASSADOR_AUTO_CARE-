@@ -192,23 +192,23 @@ router.post("/sales", async (req, res) => {
 )
 
 VALUES ($1,$2,$3,$4,$4::varchar,$5,$6,$7,$8,$9,$10,$11,$12)`,
-      
       [
-        saleId,
-        req.shopId,
-        req.user.userId,
-        receipt.trim(),
-        typeof customerName === "string" && customerName.trim()
-          ? customerName.trim()
-          : "Walk-in",
-        paymentMethod.trim(),
-        subtotal,
-        discountAmount,
-        total,
-        paidAmount,
-        balance,
-        status
-      ]
+  saleId,
+  req.shopId,
+  req.user.userId,
+  receipt.trim(),
+  receipt.trim(),
+  typeof customerName === "string" && customerName.trim()
+    ? customerName.trim()
+    : "Walk-in",
+  paymentMethod.trim(),
+  subtotal,
+  discountAmount,
+  total,
+  paidAmount,
+  balance,
+  status
+]
     );
 
     for (const item of saleItems) {
