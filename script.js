@@ -326,67 +326,58 @@ document.addEventListener('click', e => {
 // MODALS
 // --------------------------------------------------
 
+
 function openModal(title, fields, onSave) {
   $('modalTitle').textContent = title;
 
   $('modalFields').innerHTML = fields.map(f => {
-    let control;
-
-    if (f.type === 'select') {
-      control = `
-        <select name="${f.name}" ${f.required ? 'required' : ''}>
-          ${(f.options || []).map(o => `
-            <option
-              value="${esc(typeof o === 'object' ? o.value : o)}"
-              ${String(typeof o === 'object' ? o.value : o) === String(f.value ?? '') ? 'selected' : ''}
-            >
-              ${esc(typeof o === 'object' ? o.label : o)}
-            </option>
-          `).join('')}
-        </select>
-      `;
-    } else if (f.type === 'textarea') {
-      control = `
-        <textarea name="${f.name}" rows="3" ${f.required ? 'required' : ''}>${esc(f.value ?? '')}</textarea>
-      `;
-    } else {
-      control = `
-        <input
+    if (f.type === 'textarea') {
+      return `
+        <label>${f.label}</label>
+        <textarea
           name="${f.name}"
-          type="${f.type || 'text'}"
-          ${f.min !== undefined ? `min="${f.min}"` : ''}
-          ${f.step ? `step="${f.step}"` : ''}
-          value="${esc(f.value ?? '')}"
-          placeholder="${esc(f.placeholder || '')}"
+          placeholder="${f.placeholder || ''}"
           ${f.required ? 'required' : ''}
-        >
+        >${f.value || ''}</textarea>
       `;
     }
 
-    return `<label class="${f.wide ? 'wide' : ''}">${f.label}${control}</label>`;
+    return `
+      <label>${f.label}</label>
+      <input
+        type="${f.type || 'text'}"
+        name="${f.name}"
+        placeholder="${f.placeholder || ''}"
+        value="${f.value || ''}"
+        ${f.required ? 'required' : ''}
+      >
+    `;
   }).join('');
 
-  $('modalBack').classList.add('open');
+  $('modal').classList.add('open');
 
-  $('modalForm').onsubmit = e => {
+  $('modalForm').onsubmit = async e => {
     e.preventDefault();
 
-    const d = Object.fromEntries(new FormData(e.target));
+    const submit = $('modalForm').querySelector('[type="submit"]');
 
-    if (onSave(d) !== false) closeModal();
+    if (submit) submit.disabled = true;
+
+    try {
+      const d = Object.fromEntries(new FormData(e.target));
+      const result = await onSave(d);
+
+      if (result !== false) {
+        closeModal();
+      }
+    } catch (err) {
+      console.error(err);
+      toast(err.message || 'Could not save.');
+    } finally {
+      if (submit) submit.disabled = false;
+    }
   };
 }
-
-function closeModal() {
-  $('modalBack').classList.remove('open');
-}
-
-$('modalClose').onclick = $('modalCancel').onclick = closeModal;
-
-$('modalBack').onclick = e => {
-  if (e.target.id === 'modalBack') closeModal();
-};
-
 // --------------------------------------------------
 // PRODUCTS
 // --------------------------------------------------
