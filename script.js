@@ -188,7 +188,6 @@ async function loadCloudProducts() {
 // --------------------------------------------------
 // LOAD CLOUD SALES
 // --------------------------------------------------
-
 async function loadCloudSales() {
   const auth = getAuth();
 
@@ -215,8 +214,16 @@ async function loadCloudSales() {
       throw new Error('Invalid sales response from server.');
     }
 
-    // Preserve older sales that were saved only on this device.
-    const localOnlySales = db.sales.filter(s => s.localOnly === true);
+    // Keep older sales that exist only on this device.
+    const localOnlySales = db.sales
+      .filter(s =>
+        s.localOnly === true ||
+        String(s.id || '').startsWith('x')
+      )
+      .map(s => ({
+        ...s,
+        localOnly: true
+      }));
 
     const cloudSales = data.sales.map(s => ({
       id: s.id,
@@ -252,11 +259,6 @@ async function loadCloudSales() {
   }
 }
 
-// Refresh cloud data when authentication succeeds.
-document.addEventListener('pos:authenticated', async () => {
-  await loadCloudProducts();
-  await loadCloudSales();
-});
 
 // --------------------------------------------------
 // NAVIGATION
