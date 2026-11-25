@@ -1244,6 +1244,22 @@ app.get(
   }
 );
 // --------------------------------------------------
+// CUSTOMER AND SUPPLIER ROUTES
+// --------------------------------------------------
+
+const partiesRouter = require("./routes/parties");
+
+app.use(
+  "/api/shops/:shopId",
+  authenticateToken,
+  requireShopRole(["owner", "manager", "staff"]),
+  (req, res, next) => {
+    req.shopId = req.params.shopId;
+    next();
+  },
+  partiesRouter
+);
+// --------------------------------------------------
 // SERVER START
 // --------------------------------------------------
 
