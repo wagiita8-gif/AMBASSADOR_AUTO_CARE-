@@ -281,6 +281,49 @@ async function loadCloudSales(silent = false) {
 }
 
 
+let cloudSyncTimer = null;
+let cloudSyncRunning = false;
+
+function startCloudSync() {
+  if (cloudSyncTimer) clearInterval(cloudSyncTimer);
+
+  cloudSyncTimer = setInterval(async () => {
+    if (
+      !getAuth() ||
+      !navigator.onLine ||
+      document.hidden ||
+      cloudSyncRunning
+    ) return;
+
+    cloudSyncRunning = true;
+
+    try {
+      await Promise.all([
+        loadCloudProducts(true),
+        loadCloudSales(true)
+      ]);
+
+      if (document.querySelector('#page-sales')?.classList.contains('active')) {
+        renderSaleProducts();
+      }
+    } finally {
+      cloudSyncRunning = false;
+    }
+  }, 5000);
+}
+
+document.addEventListener('pos:authenticated', async () => {
+  updateConnectionStatus();
+
+  await Promise.all([
+    loadCloudProducts(),
+    loadCloudSales(),
+    loadCloudParties()
+  ]);
+
+  startCloudSync();
+});
+
 
 
 // --------------------------------------------------
