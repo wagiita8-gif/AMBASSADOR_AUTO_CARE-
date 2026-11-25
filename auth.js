@@ -318,6 +318,9 @@ if (identity) {
 
     if (indicator) {
       indicator.textContent = '● AUTHENTICATED';
+      document.dispatchEvent(
+  new CustomEvent('pos:authenticated')
+);
     }
   }
 
