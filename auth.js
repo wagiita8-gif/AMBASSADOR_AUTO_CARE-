@@ -283,6 +283,37 @@
       header.appendChild(button);
     }
 
+    // Display signed-in account and shop role
+let identity = document.getElementById('authIdentity');
+
+if (!identity && header) {
+  identity = document.createElement('span');
+  identity.id = 'authIdentity';
+
+  identity.style.cssText = `
+    margin-left: auto;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--ink);
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  `;
+
+  header.appendChild(identity);
+}
+
+if (identity) {
+  identity.textContent = '';
+
+  const email = document.createElement('span');
+  email.textContent = session.user?.email || 'Signed-in account';
+
+  const role = document.createElement('strong');
+  role.textContent = (session.role || 'user').toUpperCase();
+
+  identity.append(email, role);
+}
     const indicator = document.getElementById('connection');
 
     if (indicator) {
