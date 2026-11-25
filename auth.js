@@ -414,28 +414,46 @@ session.user = {
       setBusy(false);
     }
   });
+  
+async function restoreSession() {
+  const saved = readStoredSession();
 
-  async function restoreSession() {
-    const saved = readStoredSession();
+  if (
+    !saved ||
+    typeof saved.token !== 'string' ||
+    saved.shopId !== SHOP_ID ||
+    !saved.user ||
+    !saved.role
+  ) {
+    lock();
+    return;
+  }
 
-    if (!saved || typeof saved.token !== 'string') {
-      lock();
-      return;
-    }
+  setBusy(true);
 
-    setBusy(true);
+  try {
+    const session = await verifyToken(saved.token);
+    unlock(session);
 
-    try {
-      const session = await verifyToken(saved.token);
-      unlock(session);
-
-    } catch (error) {
+  } catch (error) {
+    // Keep an existing session available when the server
+    // cannot be reached. Do not erase it just because we're offline.
+    if (
+      !navigator.onLine ||
+      error instanceof TypeError
+    ) {
+      unlock(saved);
+      setMessage('Offline mode: using this device’s saved session.');
+    } else {
       clearStoredSession();
       lock('Your session expired or is no longer valid. Sign in again.');
-    } finally {
-      setBusy(false);
     }
+  } finally {
+    setBusy(false);
   }
+}
+
+  
 
   window.POS_AUTH = {
     get token() {
