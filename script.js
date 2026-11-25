@@ -10,6 +10,61 @@ suppliers:[{id:'s1',name:'Nakuru Auto Supplies',phone:'0712 000 000',email:'sale
 function clone(x){return JSON.parse(JSON.stringify(x))}
 function load(){try{let x=JSON.parse(localStorage.getItem(KEY));if(x&&Array.isArray(x.products)&&Array.isArray(x.sales)){return {...clone(seed),...x,customers:x.customers||[],purchases:x.purchases||[],supplierPayments:x.supplierPayments||[],creditPayments:x.creditPayments||[],expenses:x.expenses||[],cash:x.cash||clone(seed.cash),settings:{...seed.settings,...(x.settings||{})}}}}catch(e){}return clone(seed)}
 let db=load(),cart=[];
+// Load products from the cloud database
+async function loadCloudProducts() {
+  const auth = window.POS_AUTH;
+
+  if (!auth?.authenticated || !auth.token || !auth.shopId) {
+    return;
+  }
+
+  try {
+    const response = await fetch(
+      `https://ambassador-auto-care.onrender.com/api/shops/${auth.shopId}/products`,
+      {
+        headers: {
+          Authorization: `Bearer ${auth.token}`,
+          Accept: 'application/json'
+        }
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || 'Could not load products.');
+    }
+
+    const localProducts = db.products;
+
+    db.products = data.products.map(product => {
+      const existing = localProducts.find(
+        item => item.sku === product.sku
+      );
+
+      return {
+        ...existing,
+        id: product.id,
+        name: product.name,
+        sku: product.sku,
+        price: Number(product.selling_price),
+        stock: Number(product.quantity),
+        category: existing?.category || 'Other',
+        cost: existing?.cost || 0,
+        reorder: existing?.reorder || 5,
+        barcode: existing?.barcode || '',
+        supplierLinks: existing?.supplierLinks || []
+      };
+    });
+
+    render();
+    toast('Cloud products loaded successfully.');
+
+  } catch (error) {
+    console.error('Cloud product loading failed:', error);
+    toast('Could not load cloud products.');
+  }
+}
 const titles={home:'Dashboard',products:'Products',sales:'Sales & Checkout',inventory:'Inventory',suppliers:'Suppliers',purchases:'Purchases',customers:'Customers & Credit',expenses:'Expenses & Charges',cash:'Cash Register',reports:'Reports',settings:'Settings'};
 const $=id=>document.getElementById(id);
 const money=n=>'KSh '+Number(n||0).toLocaleString('en-KE',{minimumFractionDigits:2,maximumFractionDigits:2});
