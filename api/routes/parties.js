@@ -31,7 +31,7 @@ function requireShop(req, res, next) {
 }
 
 function requireManager(req, res, next) {
-    if (!['owner', 'manager'].includes(req.userRole)) {
+    if (!['owner', 'manager'].includes(req.shopRole)) {
         return res.status(403).json({
             error: 'Insufficient permissions'
         });
