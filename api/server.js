@@ -1199,74 +1199,7 @@ app.delete(
     }
   }
 );
-// --------------------------------------------------
-// TEMPORARY OWNER PASSWORD RESET
-// --------------------------------------------------
 
-app.post("/api/auth/temporary-owner-password-reset", async (req, res) => {
-  try {
-    const { resetSecret, newPassword } = req.body;
-
-    if (
-      typeof resetSecret !== "string" ||
-      typeof newPassword !== "string" ||
-      newPassword.length < 12
-    ) {
-      return res.status(400).json({
-        error: "Valid reset secret and password (minimum 12 characters) required"
-      });
-    }
-
-    if (!process.env.OWNER_PASSWORD_RESET_SECRET) {
-      return res.status(500).json({
-        error: "Password reset is not configured"
-      });
-    }
-
-    if (resetSecret !== process.env.OWNER_PASSWORD_RESET_SECRET) {
-      return res.status(403).json({
-        error: "Invalid reset secret"
-      });
-    }
-
-    const passwordHash = await bcrypt.hash(newPassword, 12);
-
-    const result = await pool.query(
-      `UPDATE users
-       SET password_hash = $1
-       WHERE email = $2
-       AND id IN (
-         SELECT user_id
-         FROM shop_users
-         WHERE shop_id = $3
-         AND role = 'owner'
-       )
-       RETURNING email`,
-      [
-        passwordHash,
-        "ambassadorsautocare@gmail.com",
-        "fe94ff4e-e3a8-4fb4-88a1-3a1fc0eef824"
-      ]
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({
-        error: "Owner account not found"
-      });
-    }
-
-    return res.json({
-      message: "Owner password updated successfully"
-    });
-
-  } catch (error) {
-    console.error("Password reset failed:", error.message);
-
-    return res.status(500).json({
-      error: "Password reset failed"
-    });
-  }
-});
 // --------------------------------------------------
 // AUTHENTICATED SESSION
 // --------------------------------------------------
