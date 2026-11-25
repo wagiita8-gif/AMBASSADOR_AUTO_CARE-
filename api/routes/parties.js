@@ -15,7 +15,7 @@ const router = express.Router();
 // req.userRole = owner / manager / staff
 
 function requireShop(req, res, next) {
-    if (!req.user || !req.user.id) {
+    if (!req.user || !req.user.userId) {
         return res.status(401).json({
             error: 'Authentication required'
         });
