@@ -130,9 +130,8 @@ function getAuth() {
 // LOAD CLOUD PRODUCTS
 // --------------------------------------------------
 
-async function loadCloudProducts() {
+async function loadCloudProducts(silent = false) {
   const auth = getAuth();
-
   if (!auth) return false;
 
   try {
@@ -153,12 +152,12 @@ async function loadCloudProducts() {
     }
 
     if (!Array.isArray(data.products)) {
-      throw new Error('Invalid products response from server.');
+      throw new Error('Invalid products response.');
     }
 
     const localProducts = db.products;
 
-    db.products = data.products.map(product => {
+    const updatedProducts = data.products.map(product => {
       const existing = localProducts.find(
         item => item.sku === product.sku
       );
@@ -178,16 +177,110 @@ async function loadCloudProducts() {
       };
     });
 
-    save();
-    toast('Cloud products loaded.');
+    const changed =
+      JSON.stringify(db.products) !== JSON.stringify(updatedProducts);
+
+    db.products = updatedProducts;
+
+    if (changed) save();
+
+    if (!silent) toast('Cloud products loaded.');
+
     return true;
 
   } catch (error) {
     console.error('Cloud product loading failed:', error);
-    toast('Could not load cloud products.');
+
+    if (!silent) {
+      toast('Could not load cloud products.');
+    }
+
     return false;
   }
 }
+
+async function loadCloudSales(silent = false) {
+  const auth = getAuth();
+  if (!auth) return false;
+
+  try {
+    const response = await fetch(
+      `${API_BASE}/api/shops/${auth.shopId}/sales`,
+      {
+        headers: {
+          Authorization: `Bearer ${auth.token}`,
+          Accept: 'application/json'
+        }
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || 'Could not load sales.');
+    }
+
+    if (!Array.isArray(data.sales)) {
+      throw new Error('Invalid sales response.');
+    }
+
+    const localOnlySales = db.sales
+      .filter(s =>
+        s.localOnly === true ||
+        String(s.id || '').startsWith('x')
+      )
+      .map(s => ({
+        ...s,
+        localOnly: true
+      }));
+
+    const cloudSales = data.sales.map(s => ({
+      id: s.id,
+      receipt: s.receipt,
+      date: s.created_at,
+      customerId: null,
+      customerName: s.customer_name || 'Walk-in',
+      payment: s.payment_method,
+      subtotal: Number(s.subtotal),
+      discount: Number(s.discount),
+      total: Number(s.total),
+      paid: Number(s.paid),
+      balance: Number(s.balance),
+      status: s.status,
+      localOnly: false,
+      items: (s.items || []).map(i => ({
+        id: i.id,
+        name: i.name,
+        sku: i.sku,
+        qty: Number(i.qty),
+        price: Number(i.price),
+        cost: 0
+      }))
+    }));
+
+    const updatedSales = [...cloudSales, ...localOnlySales];
+
+    const changed =
+      JSON.stringify(db.sales) !== JSON.stringify(updatedSales);
+
+    db.sales = updatedSales;
+
+    if (changed) save();
+
+    return true;
+
+  } catch (error) {
+    console.error('Cloud sales loading failed:', error);
+
+    if (!silent) {
+      toast('Could not load cloud sales.');
+    }
+
+    return false;
+  }
+}
+
+
 
 // --------------------------------------------------
 // LOAD CLOUD SALES
