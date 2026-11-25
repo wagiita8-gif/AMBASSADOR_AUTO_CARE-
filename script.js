@@ -57,7 +57,7 @@ async function loadCloudProducts() {
       };
     });
 
-    render();
+    save();
     toast('Cloud products loaded successfully.');
 
   } catch (error) {
