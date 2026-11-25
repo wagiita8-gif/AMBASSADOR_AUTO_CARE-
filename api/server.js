@@ -30,7 +30,7 @@ const pool = new Pool({
     rejectUnauthorized: true
   }
 });
-
+app.locals.pool = pool;
 // --------------------------------------------------
 // HELPER FUNCTIONS
 // --------------------------------------------------
