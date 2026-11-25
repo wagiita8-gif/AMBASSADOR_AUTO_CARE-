@@ -612,105 +612,216 @@ function unlinkSupplier(pid,sid) {
   save();
   manageProductSuppliers(pid);
 }
-
 // --------------------------------------------------
-// SUPPLIERS AND CUSTOMERS
+// CLOUD CUSTOMERS AND SUPPLIERS
 // --------------------------------------------------
 
+async function cloudRequest(path, options = {}) {
+  const auth = getAuth();
+
+  if (!auth) {
+    throw new Error('Please sign in first.');
+  }
+
+  const response = await fetch(
+    `${API_BASE}/api/shops/${auth.shopId}/${path}`,
+    {
+      ...options,
+      headers: {
+        Authorization: `Bearer ${auth.token}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        ...(options.headers || {})
+      }
+    }
+  );
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data.error || 'Cloud request failed.');
+  }
+
+  return data;
+}
+
+async function loadCloudParties() {
+  if (!getAuth()) return false;
+
+  try {
+    const [customerData, supplierData] = await Promise.all([
+      cloudRequest('customers'),
+      cloudRequest('suppliers')
+    ]);
+
+    db.customers = (customerData.customers || []).map(c => ({
+      id: c.id,
+      name: c.name,
+      phone: c.phone || '',
+      email: c.email || '',
+      address: c.address || '',
+      notes: c.notes || '',
+      localOnly: false
+    }));
+
+    db.suppliers = (supplierData.suppliers || []).map(s => ({
+      id: s.id,
+      name: s.name,
+      phone: s.phone || '',
+      email: s.email || '',
+      address: s.address || '',
+      notes: s.notes || '',
+      localOnly: false
+    }));
+
+    save();
+    return true;
+
+  } catch (error) {
+    console.error('Cloud parties loading failed:', error);
+    toast('Could not load shared customers and suppliers.');
+    return false;
+  }
+}
+
+// ADD SUPPLIER
 function supplierForm() {
   openModal('Add supplier', [
     {name:'name',label:'Supplier / business name',required:true},
     {name:'phone',label:'Phone number'},
     {name:'email',label:'Email'},
     {name:'address',label:'Address'}
-  ], d => {
-    db.suppliers.push({id:uid(),...d});
-    save();
-    toast('Supplier added locally.');
+  ], async d => {
+    const name = d.name.trim();
+
+    if (!name) {
+      toast('Supplier name is required.');
+      return false;
+    }
+
+    try {
+      const result = await cloudRequest('suppliers', {
+        method: 'POST',
+        body: JSON.stringify({
+          name,
+          phone: d.phone,
+          email: d.email,
+          address: d.address
+        })
+      });
+
+      const s = result.supplier;
+
+      db.suppliers.push({
+        id: s.id,
+        name: s.name,
+        phone: s.phone || '',
+        email: s.email || '',
+        address: s.address || '',
+        notes: s.notes || '',
+        localOnly: false
+      });
+
+      save();
+      toast('Supplier saved to shared cloud.');
+
+    } catch (error) {
+      console.error(error);
+      toast(error.message || 'Could not save supplier.');
+      return false;
+    }
   });
 }
 
-function deleteSupplier(id) {
-  if (!confirm('Delete this supplier and unlink it from products? Historical purchases remain.')) return;
+// DELETE SUPPLIER
+async function deleteSupplier(id) {
+  const supplier = db.suppliers.find(s => s.id === id);
 
-  db.suppliers = db.suppliers.filter(s => s.id !== id);
+  if (!supplier) return;
 
-  db.products.forEach(p =>
-    p.supplierLinks = (p.supplierLinks || []).filter(l => l.supplierId !== id)
-  );
+  if (!confirm('Delete this supplier from the shared shop records?')) {
+    return;
+  }
 
-  save();
+  try {
+    await cloudRequest(`suppliers/${encodeURIComponent(id)}`, {
+      method: 'DELETE'
+    });
+
+    db.suppliers = db.suppliers.filter(s => s.id !== id);
+
+    db.products.forEach(p => {
+      p.supplierLinks = (p.supplierLinks || [])
+        .filter(l => l.supplierId !== id);
+    });
+
+    save();
+    toast('Supplier deleted from shared records.');
+
+  } catch (error) {
+    console.error(error);
+    toast(error.message || 'Could not delete supplier.');
+  }
 }
 
+// ADD CUSTOMER
 function customerForm() {
   openModal('Add customer', [
     {name:'name',label:'Full name',required:true},
     {name:'phone',label:'Phone number',required:true},
     {name:'email',label:'Email'},
     {name:'notes',label:'Notes',type:'textarea',wide:true}
-  ], d => {
-    db.customers.push({id:uid(),...d});
-    save();
-    toast('Customer added locally.');
-  });
-}
+  ], async d => {
+    const name = d.name.trim();
+    const phone = d.phone.trim();
 
-function customerBalance(id) {
-  return db.sales
-    .filter(s => s.customerId === id)
-    .reduce((a,s) => a + s.balance, 0);
-}
-
-function payCustomer(id) {
-  const c = db.customers.find(x => x.id === id);
-  const due = customerBalance(id);
-
-  if (!c || due <= 0) return toast('No outstanding credit.');
-
-  openModal('Record customer payment — ' + c.name, [
-    {name:'amount',label:'Amount received (KSh)',type:'number',min:.01,step:'.01',required:true},
-    {name:'method',label:'Payment method',type:'select',options:['Cash','M-Pesa','Bank','Card','Other']},
-    {name:'reference',label:'Transaction reference'},
-    {name:'notes',label:'Notes'}
-  ], d => {
-    const amount = Number(d.amount);
-
-    if (!Number.isFinite(amount) || amount <= 0 || amount > due) {
-      toast('Payment must be greater than zero and not exceed balance.');
+    if (!name || !phone) {
+      toast('Customer name and phone are required.');
       return false;
     }
 
-    let left = amount;
-
-    db.sales
-      .filter(s => s.customerId === id && s.balance > 0)
-      .sort((a,b) => new Date(a.date) - new Date(b.date))
-      .forEach(s => {
-        if (left <= 0) return;
-
-        const paid = Math.min(left,s.balance);
-
-        s.balance = +(s.balance - paid).toFixed(2);
-        s.paid = +(s.paid + paid).toFixed(2);
-        s.status = s.balance === 0 ? 'Paid' : 'Part paid';
-
-        left = +(left - paid).toFixed(2);
+    try {
+      const result = await cloudRequest('customers', {
+        method: 'POST',
+        body: JSON.stringify({
+          name,
+          phone,
+          email: d.email,
+          notes: d.notes
+        })
       });
 
-    db.creditPayments.push({
-      id:uid(),
-      customerId:id,
-      amount,
-      method:d.method,
-      reference:d.reference,
-      date:new Date().toISOString(),
-      notes:d.notes
-    });
+      const c = result.customer;
 
-    save();
-    toast('Customer payment recorded locally.');
+      db.customers.push({
+        id: c.id,
+        name: c.name,
+        phone: c.phone || '',
+        email: c.email || '',
+        address: c.address || '',
+        notes: c.notes || '',
+        localOnly: false
+      });
+
+      save();
+      toast('Customer saved to shared cloud.');
+
+    } catch (error) {
+      console.error(error);
+      toast(error.message || 'Could not save customer.');
+      return false;
+    }
   });
 }
+
+// CUSTOMER BALANCE
+function customerBalance(id) {
+  return db.sales
+    .filter(s => s.customerId === id)
+    .reduce((a, s) => a + Number(s.balance || 0), 0);
+}
+
+    
 
 // --------------------------------------------------
 // SUPPLIER PAYMENTS
