@@ -30,7 +30,9 @@ const pool = new Pool({
     rejectUnauthorized: true
   }
 });
+
 app.locals.pool = pool;
+
 // --------------------------------------------------
 // HELPER FUNCTIONS
 // --------------------------------------------------
@@ -1244,6 +1246,7 @@ app.get(
     }
   }
 );
+
 // --------------------------------------------------
 // CUSTOMER AND SUPPLIER ROUTES
 // --------------------------------------------------
@@ -1260,15 +1263,52 @@ app.use(
   },
   partiesRouter
 );
+
+// --------------------------------------------------
+// CLOUD SALES ROUTES
+// --------------------------------------------------
+
+const {
+  router: salesRouter,
+  initializeSalesTables
+} = require("./routes/sales");
+
+app.use(
+  "/api/shops/:shopId",
+  authenticateToken,
+  requireShopRole(["owner", "manager", "staff"]),
+  (req, res, next) => {
+    req.shopId = req.params.shopId;
+    next();
+  },
+  salesRouter
+);
+
 // --------------------------------------------------
 // SERVER START
 // --------------------------------------------------
 
-app.listen(PORT, () => {
-  console.log(
-    `Ambassadors Auto Care API running on port ${PORT}`
-  );
-});
+async function startServer() {
+  try {
+    await initializeSalesTables(pool);
+
+    app.listen(PORT, () => {
+      console.log(
+        `Ambassadors Auto Care API running on port ${PORT}`
+      );
+    });
+
+  } catch (error) {
+    console.error(
+      "Failed to initialize sales tables:",
+      error.message
+    );
+
+    process.exit(1);
+  }
+}
+
+startServer();
 
 // --------------------------------------------------
 // GRACEFUL SHUTDOWN
