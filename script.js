@@ -95,6 +95,8 @@ const uid = () =>
 
 const toast = s => {
   const t = $('toast');
+  if (!t) return;
+
   t.textContent = s;
   t.classList.add('show');
   clearTimeout(toast.timer);
@@ -131,7 +133,7 @@ function getAuth() {
 async function loadCloudProducts() {
   const auth = getAuth();
 
-  if (!auth) return;
+  if (!auth) return false;
 
   try {
     const response = await fetch(
@@ -178,20 +180,23 @@ async function loadCloudProducts() {
 
     save();
     toast('Cloud products loaded.');
+    return true;
 
   } catch (error) {
     console.error('Cloud product loading failed:', error);
     toast('Could not load cloud products.');
+    return false;
   }
 }
 
 // --------------------------------------------------
 // LOAD CLOUD SALES
 // --------------------------------------------------
+
 async function loadCloudSales() {
   const auth = getAuth();
 
-  if (!auth) return;
+  if (!auth) return false;
 
   try {
     const response = await fetch(
@@ -214,7 +219,7 @@ async function loadCloudSales() {
       throw new Error('Invalid sales response from server.');
     }
 
-    // Keep older sales that exist only on this device.
+    // Preserve sales previously saved only on this device.
     const localOnlySales = db.sales
       .filter(s =>
         s.localOnly === true ||
@@ -222,43 +227,51 @@ async function loadCloudSales() {
       )
       .map(s => ({
         ...s,
-        localOnly: true
+        localOnly:true
       }));
 
     const cloudSales = data.sales.map(s => ({
-      id: s.id,
-      receipt: s.receipt,
-      date: s.created_at,
-      customerId: null,
-      customerName: s.customer_name || 'Walk-in',
-      payment: s.payment_method,
-      subtotal: Number(s.subtotal),
-      discount: Number(s.discount),
-      total: Number(s.total),
-      paid: Number(s.paid),
-      balance: Number(s.balance),
-      status: s.status,
-      localOnly: false,
-      items: (s.items || []).map(i => ({
-        id: i.id,
-        name: i.name,
-        sku: i.sku,
-        qty: Number(i.qty),
-        price: Number(i.price),
-        cost: 0
+      id:s.id,
+      receipt:s.receipt,
+      date:s.created_at,
+      customerId:null,
+      customerName:s.customer_name || 'Walk-in',
+      payment:s.payment_method,
+      subtotal:Number(s.subtotal),
+      discount:Number(s.discount),
+      total:Number(s.total),
+      paid:Number(s.paid),
+      balance:Number(s.balance),
+      status:s.status,
+      localOnly:false,
+      items:(s.items || []).map(i => ({
+        id:i.id,
+        name:i.name,
+        sku:i.sku,
+        qty:Number(i.qty),
+        price:Number(i.price),
+        cost:0
       }))
     }));
 
     db.sales = [...cloudSales, ...localOnlySales];
 
     save();
+    return true;
 
   } catch (error) {
     console.error('Cloud sales loading failed:', error);
     toast('Could not load cloud sales.');
+    return false;
   }
 }
 
+// Refresh cloud data when authentication succeeds.
+document.addEventListener('pos:authenticated', async () => {
+  updateConnectionStatus();
+  await loadCloudProducts();
+  await loadCloudSales();
+});
 
 // --------------------------------------------------
 // NAVIGATION
@@ -412,16 +425,16 @@ function productForm(id) {
 
     const obj = {
       ...p,
-      id: p.id || uid(),
+      id:p.id || uid(),
       name,
       sku,
-      barcode: d.barcode.trim(),
-      category: d.category.trim(),
-      cost: vals[0],
-      price: vals[1],
-      stock: vals[2],
-      reorder: vals[3],
-      supplierLinks: p.supplierLinks || []
+      barcode:d.barcode.trim(),
+      category:d.category.trim(),
+      cost:vals[0],
+      price:vals[1],
+      stock:vals[2],
+      reorder:vals[3],
+      supplierLinks:p.supplierLinks || []
     };
 
     const i = db.products.findIndex(x => x.id === obj.id);
@@ -576,6 +589,7 @@ function manageProductSuppliers(pid) {
 
 function setSupplierPreference(pid,sid,status) {
   const p = db.products.find(x => x.id === pid);
+  if (!p) return;
 
   if (status === 'preferred') {
     p.supplierLinks.forEach(l => l.status = 'alternative');
@@ -591,6 +605,7 @@ function setSupplierPreference(pid,sid,status) {
 
 function unlinkSupplier(pid,sid) {
   const p = db.products.find(x => x.id === pid);
+  if (!p) return;
 
   p.supplierLinks = p.supplierLinks.filter(l => l.supplierId !== sid);
 
@@ -1057,9 +1072,12 @@ async function completeSale() {
     return toast('Please log in before recording a sale.');
   }
 
+  if (!navigator.onLine) {
+    return toast('Internet connection required for cloud checkout.');
+  }
+
   const subtotal = cart.reduce((sum,item) => {
     const product = db.products.find(p => p.id === item.id);
-
     return sum + (product ? product.price * item.qty : 0);
   }, 0);
 
@@ -1080,8 +1098,7 @@ async function completeSale() {
     return toast('Enter a valid payment amount.');
   }
 
-  // The current backend does not yet store customer IDs
-  // or support shared customer credit-payment records.
+  // Shared credit sales are not implemented on the backend yet.
   if (paid < total) {
     return toast('Cloud credit sales are not enabled yet. Receive full payment to continue.');
   }
@@ -1113,7 +1130,6 @@ async function completeSale() {
   };
 
   const button = $('completeSale');
-
   button.disabled = true;
 
   try {
@@ -1140,7 +1156,7 @@ async function completeSale() {
       throw new Error('The server response did not include a sale ID.');
     }
 
-    // The backend has successfully saved the sale and deducted stock.
+    // The server has saved the sale and deducted stock.
     cart = [];
 
     $('discount').value = 0;
@@ -1165,7 +1181,10 @@ async function completeSale() {
 function viewReceipt(id) {
   const s = db.sales.find(x => x.id === id);
 
-  if (!s) return;
+  if (!s) {
+    toast('Receipt not found in the loaded sales.');
+    return;
+  }
 
   const lines = s.items.map(i =>
     `${i.name} × ${i.qty}  ${money(i.price * i.qty)}`
@@ -1359,11 +1378,11 @@ function render() {
     new Date(s.date).toDateString() === today
   );
 
-  const total = db.sales.reduce((a,s) => a + s.total, 0);
+  const total = db.sales.reduce((a,s) => a + Number(s.total || 0), 0);
 
   const expenses = db.expenses
     .filter(x => x.status !== 'voided')
-    .reduce((a,x) => a + x.amount, 0);
+    .reduce((a,x) => a + Number(x.amount || 0), 0);
 
   $('today').textContent = new Date().toLocaleDateString('en-KE', {
     weekday:'long',
@@ -1373,7 +1392,7 @@ function render() {
   });
 
   $('dashSales').textContent = money(
-    todaySales.reduce((a,s) => a + s.total, 0)
+    todaySales.reduce((a,s) => a + Number(s.total || 0), 0)
   );
 
   $('dashCount').textContent = todaySales.length;
@@ -1458,8 +1477,8 @@ function render() {
   $('customerRows').innerHTML = db.customers.map(c => {
     const sales = db.sales.filter(s => s.customerId === c.id);
 
-    const original = sales.reduce((a,s) => a + s.total, 0);
-    const paid = sales.reduce((a,s) => a + s.paid, 0);
+    const original = sales.reduce((a,s) => a + Number(s.total || 0), 0);
+    const paid = sales.reduce((a,s) => a + Number(s.paid || 0), 0);
     const bal = customerBalance(c.id);
 
     return `
@@ -1490,7 +1509,7 @@ function render() {
       </tr>
     `).join('') || emptyRow(5,'No credit payments recorded.');
 
-  const credit = db.sales.reduce((a,s) => a + s.balance, 0);
+  const credit = db.sales.reduce((a,s) => a + Number(s.balance || 0), 0);
 
   $('creditTotal').textContent = money(credit);
 
@@ -1513,7 +1532,7 @@ function render() {
     `).join('') || emptyRow(8,'No purchases recorded.');
 
   $('purchaseTotal').textContent = money(
-    db.purchases.reduce((a,p) => a + p.total, 0)
+    db.purchases.reduce((a,p) => a + Number(p.total || 0), 0)
   );
 
   $('supplierDue').textContent = money(
@@ -2013,3 +2032,8 @@ window.addEventListener('offline',updateConnectionStatus);
 loadSettings();
 render();
 updateConnectionStatus();
+
+      
+
+    
+
