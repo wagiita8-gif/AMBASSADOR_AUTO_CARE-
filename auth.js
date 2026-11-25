@@ -363,6 +363,11 @@ if (identity) {
 
     const session = await verifyToken(data.token);
 
+session.user = {
+  ...session.user,
+  email: data.user?.email || email
+};
+
     localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({
