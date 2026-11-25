@@ -186,11 +186,12 @@ router.post("/sales", async (req, res) => {
 
     await client.query(
       `INSERT INTO sales (
-        id, shop_id, user_id, receipt, customer_name,
-        payment_method, subtotal, discount, total,
-        paid, balance, status
-      )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+  id, shop_id, user_id, receipt, invoice_number,
+  customer_name, payment_method, subtotal, discount,
+  total, paid, balance, status
+)
+VALUES ($1,$2,$3,$4,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+      
       [
         saleId,
         req.shopId,
