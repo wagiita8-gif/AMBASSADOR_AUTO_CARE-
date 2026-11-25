@@ -642,7 +642,7 @@ async function deleteProduct(id) {
     toast(error.message || 'Could not delete product.');
   }
 }
-function deleteProduct(id) {
+
 
 
 // --------------------------------------------------
