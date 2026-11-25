@@ -267,12 +267,16 @@ async function loadCloudSales() {
 }
 
 // Refresh cloud data when authentication succeeds.
+
 document.addEventListener('pos:authenticated', async () => {
   updateConnectionStatus();
-  await loadCloudProducts();
-  await loadCloudSales();
-});
 
+  await Promise.all([
+    loadCloudProducts(),
+    loadCloudSales(),
+    loadCloudParties()
+  ]);
+});
 // --------------------------------------------------
 // NAVIGATION
 // --------------------------------------------------
