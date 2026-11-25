@@ -462,64 +462,125 @@ function openModal(title, fields, onSave) {
 // PRODUCTS
 // --------------------------------------------------
 
-function productForm(id) {
+async function productForm(id) {
   const p = db.products.find(x => x.id === id) || {};
 
   openModal(id ? 'Edit product' : 'Add product', [
     {name:'name',label:'Product name',value:p.name,required:true},
-    {name:'sku',label:'SKU (leave blank to generate)',value:p.sku},
+    {name:'sku',label:'SKU',value:p.sku},
     {name:'barcode',label:'Barcode (optional)',value:p.barcode},
     {name:'category',label:'Category',value:p.category || 'Other',required:true},
     {name:'cost',label:'Buying price (KSh)',type:'number',min:0,step:'.01',value:p.cost ?? 0,required:true},
     {name:'price',label:'Selling price (KSh)',type:'number',min:0,step:'.01',value:p.price ?? 0,required:true},
-    {name:'stock',label:id ? 'Current stock' : 'Opening stock',type:'number',min:0,step:'.001',value:p.stock ?? 0,required:true},
-    {name:'reorder',label:'Reorder level',type:'number',min:0,step:'.001',value:p.reorder ?? 5,required:true}
-  ], d => {
+    {name:'stock',label:'Stock quantity',type:'number',min:0,step:'1',value:p.stock ?? 0,required:true},
+    {name:'reorder',label:'Reorder level',type:'number',min:0,step:'1',value:p.reorder ?? 5,required:true}
+  ], async d => {
+    const auth = getAuth();
+    if (!auth) throw new Error('Please sign in first.');
+
     const name = d.name.trim();
     const sku = d.sku.trim() || makeSku(name);
-    const vals = [+d.cost,+d.price,+d.stock,+d.reorder];
+    const price = Number(d.price);
+    const stock = Number(d.stock);
 
-    if (!name || vals.some(v => !Number.isFinite(v) || v < 0)) {
-      toast('Enter valid product details and non-negative amounts.');
-      return false;
+    if (!name || !sku || !Number.isFinite(price) || price <= 0) {
+      throw new Error('Enter a valid name, SKU and selling price.');
+    }
+
+    if (!Number.isSafeInteger(stock) || stock < 0) {
+      throw new Error('Stock must be a whole number.');
     }
 
     if (db.products.some(x =>
       (x.sku || '').toLowerCase() === sku.toLowerCase() && x.id !== id
     )) {
-      toast('SKU already exists.');
-      return false;
+      throw new Error('SKU already exists.');
     }
 
-    if (d.barcode && db.products.some(x =>
-      x.barcode === d.barcode && x.id !== id
-    )) {
-      toast('Barcode already exists.');
-      return false;
-    }
-
-    const obj = {
-      ...p,
-      id:p.id || uid(),
-      name,
-      sku,
-      barcode:d.barcode.trim(),
-      category:d.category.trim(),
-      cost:vals[0],
-      price:vals[1],
-      stock:vals[2],
-      reorder:vals[3],
-      supplierLinks:p.supplierLinks || []
+    const url = `${API_BASE}/api/shops/${auth.shopId}/products`;
+    const headers = {
+      Authorization: `Bearer ${auth.token}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json'
     };
 
-    const i = db.products.findIndex(x => x.id === obj.id);
+    let productId = id;
 
-    i < 0 ? db.products.push(obj) : db.products[i] = obj;
+    if (id) {
+      const response = await fetch(`${url}/${id}`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({
+          name,
+          sku,
+          sellingPrice: price
+        })
+      });
+
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Product update failed.');
+
+      if (stock !== Number(p.stock)) {
+        const stockResponse = await fetch(`${url}/${id}/stock-count`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            physicalQuantity: stock,
+            reason: 'Physical count'
+          })
+        });
+
+        const stockData = await stockResponse.json();
+        if (!stockResponse.ok) {
+          throw new Error(stockData.error || 'Details updated, but stock update failed. Refresh before retrying.');
+        }
+      }
+    } else {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          name,
+          sku,
+          sellingPrice: price,
+          quantity: stock
+        })
+      });
+
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Product creation failed.');
+
+      productId = data.product.id;
+    }
+
+    const local = {
+      ...p,
+      id: productId,
+      name,
+      sku,
+      barcode: d.barcode.trim(),
+      category: d.category.trim(),
+      cost: Number(d.cost),
+      price,
+      stock,
+      reorder: Number(d.reorder),
+      supplierLinks: p.supplierLinks || []
+    };
+
+    const index = db.products.findIndex(x => x.id === productId);
+    if (index < 0) db.products.push(local);
+    else db.products[index] = local;
 
     save();
-    toast('Product saved locally.');
+
+    await loadCloudProducts(true);
+    render();
+    toast(id ? 'Product updated in cloud.' : 'Product saved to cloud.');
   });
 }
+
+function productForm(id) {
+
 
 function makeSku(name) {
   const prefix = name.toUpperCase()
