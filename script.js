@@ -56,9 +56,10 @@ function load() {
   return clone(seed);
 }
 
+
 let db = load();
 let cart = [];
-
+let activeSaleRequestId = null;
 const titles = {
   home:'Dashboard',
   products:'Products',
@@ -1793,14 +1794,17 @@ async function completeSale() {
       return toast('Stock changed; review your cart.');
     }
   }
-
+  if (!activeSaleRequestId) {
+    activeSaleRequestId = crypto.randomUUID();
+}
   const receipt =
     'AA-' +
     Date.now().toString() +
     '-' +
-    Math.random().toString(36).slice(2,6).toUpperCase();
+    Math.random().toString(36).slice(2,6).toUpperCase()
 
-    const payload = {
+      const payload = {
+    requestId: activeSaleRequestId,
     receipt,
     customerId,
     customerName:customer?.name || 'Walk-in',
@@ -1843,6 +1847,7 @@ async function completeSale() {
     // The server has saved the sale and deducted stock.
     cart = [];
 
+    activeSaleRequestId = null;
     $('discount').value = 0;
     $('amountPaid').value = '';
     $('saleCustomer').value = '';
