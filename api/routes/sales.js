@@ -255,31 +255,33 @@ router.post("/sales", async (req, res) => {
       balance === 0 ? "Paid" :
       paidAmount === 0 ? "Credit" : "Part paid";
 
-    await client.query(
+        await client.query(
       `INSERT INTO sales (
-  id, shop_id, user_id, receipt, invoice_number,
-  customer_name, payment_method, subtotal, discount,
-  total, paid, balance, status
-)
-
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+        id, shop_id, user_id, receipt, invoice_number,
+        customer_id, customer_name, payment_method,
+        subtotal, discount, total, paid, balance, status
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
       [
-  saleId,
-  req.shopId,
-  req.user.userId,
-  receipt.trim(),
-  receipt.trim(),
-  typeof customerName === "string" && customerName.trim()
-    ? customerName.trim()
-    : "Walk-in",
-  paymentMethod.trim(),
-  subtotal,
-  discountAmount,
-  total,
-  paidAmount,
-  balance,
-  status
-]
+        saleId,
+        req.shopId,
+        req.user.userId,
+        receipt.trim(),
+        receipt.trim(),
+        verifiedCustomer ? verifiedCustomer.id : null,
+        verifiedCustomer ? verifiedCustomer.name :
+          (typeof customerName === "string" && customerName.trim()
+            ? customerName.trim()
+            : "Walk-in"),
+        paymentMethod.trim(),
+        subtotal,
+        discountAmount,
+        total,
+        paidAmount,
+        balance,
+        status
+      ]
+    
     );
 
     for (const item of saleItems) {
