@@ -119,7 +119,251 @@ router.get("/sales", async (req, res) => {
     res.status(500).json({ error: "Could not load sales" });
   }
 });
+// --------------------------------------------------
+// CUSTOMER PAYMENT HISTORY
+// --------------------------------------------------
 
+router.get("/customer-payments", async (req, res) => {
+  const pool = req.app.locals.pool;
+
+  try {
+    const result = await pool.query(
+      `SELECT
+         cp.*,
+         c.name AS customer_name,
+         COALESCE(
+           json_agg(
+             json_build_object(
+               'saleId', a.sale_id,
+               'amount', a.amount
+             )
+           ) FILTER (WHERE a.sale_id IS NOT NULL),
+           '[]'
+         ) AS allocations
+       FROM customer_payments cp
+       JOIN customers c
+         ON c.id = cp.customer_id
+        AND c.shop_id = cp.shop_id
+       LEFT JOIN customer_payment_allocations a
+         ON a.payment_id = cp.id
+       WHERE cp.shop_id = $1
+       GROUP BY cp.id, c.name
+       ORDER BY cp.created_at DESC`,
+      [req.shopId]
+    );
+
+    res.json({ payments: result.rows });
+  } catch (error) {
+    console.error("Customer payment retrieval failed:", error.message);
+    res.status(500).json({
+      error: "Could not load customer payments"
+    });
+  }
+});
+
+// --------------------------------------------------
+// RECORD CUSTOMER PAYMENT
+// --------------------------------------------------
+
+router.post("/customer-payments", async (req, res) => {
+  const pool = req.app.locals.pool;
+
+  const {
+    customerId,
+    amount,
+    method,
+    reference = "",
+    notes = ""
+  } = req.body;
+
+  const paymentAmount = Number(amount);
+
+  if (
+    typeof customerId !== "string" ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(customerId) ||
+    !Number.isFinite(paymentAmount) ||
+    paymentAmount <= 0 ||
+    Math.round(paymentAmount * 100) !== paymentAmount * 100 ||
+    typeof method !== "string" ||
+    !method.trim() ||
+    typeof reference !== "string" ||
+    typeof notes !== "string"
+  ) {
+    return res.status(400).json({
+      error: "Invalid customer payment details"
+    });
+  }
+
+  let client;
+  let transactionStarted = false;
+
+  try {
+    client = await pool.connect();
+
+    await client.query("BEGIN");
+    transactionStarted = true;
+
+    const customerResult = await client.query(
+      `SELECT id, name
+       FROM customers
+       WHERE id = $1 AND shop_id = $2
+       FOR UPDATE`,
+      [customerId, req.shopId]
+    );
+
+    if (!customerResult.rows.length) {
+      throw new Error("Customer not found.");
+    }
+
+    const invoiceResult = await client.query(
+      `SELECT id, receipt, total, paid, balance
+       FROM sales
+       WHERE shop_id = $1
+         AND customer_id = $2
+         AND balance > 0
+       ORDER BY created_at ASC, id ASC
+       FOR UPDATE`,
+      [req.shopId, customerId]
+    );
+
+    const invoices = invoiceResult.rows;
+
+    const outstandingCents = invoices.reduce(
+      (sum, invoice) =>
+        sum + Math.round(Number(invoice.balance) * 100),
+      0
+    );
+
+    const paymentCents = Math.round(paymentAmount * 100);
+
+    if (paymentCents > outstandingCents) {
+      throw new Error(
+        `Payment exceeds outstanding balance of ${(outstandingCents / 100).toFixed(2)}.`
+      );
+    }
+
+    if (paymentCents === 0) {
+      throw new Error("Payment amount must be greater than zero.");
+    }
+
+    const paymentId = randomUUID();
+
+    await client.query(
+      `INSERT INTO customer_payments (
+        id, shop_id, customer_id, user_id,
+        amount, method, reference, notes
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [
+        paymentId,
+        req.shopId,
+        customerId,
+        req.user.userId,
+        paymentCents / 100,
+        method.trim(),
+        reference.trim() || null,
+        notes.trim() || null
+      ]
+    );
+
+    let remainingCents = paymentCents;
+    const allocations = [];
+
+    for (const invoice of invoices) {
+      if (remainingCents <= 0) break;
+
+      const balanceCents = Math.round(
+        Number(invoice.balance) * 100
+      );
+
+      const allocatedCents = Math.min(
+        remainingCents,
+        balanceCents
+      );
+
+      const newPaidCents =
+        Math.round(Number(invoice.paid) * 100) +
+        allocatedCents;
+
+      const newBalanceCents =
+        balanceCents - allocatedCents;
+
+      const newStatus =
+        newBalanceCents === 0 ? "Paid" : "Part paid";
+
+      await client.query(
+        `INSERT INTO customer_payment_allocations (
+          payment_id, sale_id, amount
+        )
+        VALUES ($1,$2,$3)`,
+        [
+          paymentId,
+          invoice.id,
+          allocatedCents / 100
+        ]
+      );
+
+      await client.query(
+        `UPDATE sales
+         SET paid = $1,
+             balance = $2,
+             status = $3
+         WHERE id = $4
+           AND shop_id = $5
+           AND customer_id = $6`,
+        [
+          newPaidCents / 100,
+          newBalanceCents / 100,
+          newStatus,
+          invoice.id,
+          req.shopId,
+          customerId
+        ]
+      );
+
+      allocations.push({
+        receipt: invoice.receipt,
+        amount: allocatedCents / 100,
+        balance: newBalanceCents / 100
+      });
+
+      remainingCents -= allocatedCents;
+    }
+
+    await client.query("COMMIT");
+    transactionStarted = false;
+
+    res.status(201).json({
+      message: "Customer payment recorded successfully",
+      payment: {
+        id: paymentId,
+        customerId,
+        amount: paymentCents / 100,
+        method: method.trim(),
+        allocations
+      }
+    });
+
+  } catch (error) {
+    if (client && transactionStarted) {
+      await client.query("ROLLBACK").catch(() => {});
+    }
+
+    console.error("Customer payment failed:", error.message);
+
+    res.status(
+      error.message.includes("not found") ||
+      error.message.includes("exceeds outstanding") ||
+      error.message.includes("greater than zero")
+        ? 400 : 500
+    ).json({
+      error: error.message || "Could not record customer payment"
+    });
+
+  } finally {
+    if (client) client.release();
+  }
+});
 router.post("/sales", async (req, res) => {
   const pool = req.app.locals.pool;
     const {
