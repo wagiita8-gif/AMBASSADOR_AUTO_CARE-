@@ -279,7 +279,54 @@ async function loadCloudSales(silent = false) {
     return false;
   }
 }
+async function loadCloudCustomerPayments(silent = false) {
+  const auth = getAuth();
+  if (!auth) return false;
 
+  try {
+    const response = await fetch(
+      `${API_BASE}/api/shops/${auth.shopId}/customer-payments`,
+      {
+        headers: {
+          Authorization: `Bearer ${auth.token}`,
+          Accept: 'application/json'
+        }
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || 'Could not load customer payments.');
+    }
+
+    if (!Array.isArray(data.payments)) {
+      throw new Error('Invalid customer payments response.');
+    }
+
+    db.creditPayments = data.payments.map(p => ({
+      id: p.id,
+      customerId: p.customer_id,
+      amount: Number(p.amount),
+      method: p.method,
+      reference: p.reference || '',
+      notes: p.notes || '',
+      date: p.created_at
+    }));
+
+    save();
+    return true;
+
+  } catch (error) {
+    console.error('Cloud customer payments loading failed:', error);
+
+    if (!silent) {
+      toast('Could not load cloud customer payments.');
+    }
+
+    return false;
+  }
+}
 
 let cloudSyncTimer = null;
 let cloudSyncRunning = false;
@@ -298,9 +345,10 @@ function startCloudSync() {
     cloudSyncRunning = true;
 
     try {
-      await Promise.all([
+            await Promise.all([
         loadCloudProducts(true),
-        loadCloudSales(true)
+        loadCloudSales(true),
+        loadCloudCustomerPayments(true)
       ]);
 
       if (document.querySelector('#page-sales')?.classList.contains('active')) {
@@ -315,10 +363,11 @@ function startCloudSync() {
 document.addEventListener('pos:authenticated', async () => {
   updateConnectionStatus();
 
-  await Promise.all([
+    await Promise.all([
     loadCloudProducts(),
     loadCloudSales(),
-    loadCloudParties()
+    loadCloudParties(),
+    loadCloudCustomerPayments()
   ]);
 
   startCloudSync();
