@@ -494,6 +494,11 @@ router.post("/sales", async (req, res) => {
 
     const balance = Number((total - paidAmount).toFixed(2));
 
+        if (balance > 0 && !verifiedCustomer) {
+      throw new Error(
+        "Credit sales must be linked to a registered customer."
+      );
+    }
     const saleId = randomUUID();
     const status =
       balance === 0 ? "Paid" :
