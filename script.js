@@ -1513,10 +1513,13 @@ async function completeSale() {
   }
 
   // Shared credit sales are not implemented on the backend yet.
-  if (paid < total) {
-    return toast('Cloud credit sales are not enabled yet. Receive full payment to continue.');
+    if (Math.round(paid * 100) !== paid * 100) {
+    return toast('Payment must be a valid amount in cents.');
   }
 
+  if (paid < total && !customerId) {
+    return toast('Select a customer before recording a credit sale.');
+  }
   for (const item of cart) {
     const product = db.products.find(p => p.id === item.id);
 
@@ -1531,10 +1534,11 @@ async function completeSale() {
     '-' +
     Math.random().toString(36).slice(2,6).toUpperCase();
 
-  const payload = {
+    const payload = {
     receipt,
+    customerId,
     customerName:customer?.name || 'Walk-in',
-    paymentMethod:$('paymentMethod').value,
+    paymentMethod:paid === 0 ? 'Credit' : $('paymentMethod').value,
     discount,
     paid,
     items:cart.map(item => ({
