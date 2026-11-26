@@ -24,7 +24,35 @@ async function initializePurchaseTables(pool) {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       UNIQUE(shop_id, request_id)
     );
+       ALTER TABLE purchases
+      ADD COLUMN IF NOT EXISTS purchase_date DATE;
 
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'purchases'
+          AND column_name = 'date'
+      ) THEN
+        EXECUTE '
+          UPDATE purchases
+          SET purchase_date = "date"::date
+          WHERE purchase_date IS NULL
+        ';
+      END IF;
+    END $$;
+
+    UPDATE purchases
+    SET purchase_date = CURRENT_DATE
+    WHERE purchase_date IS NULL;
+
+    ALTER TABLE purchases
+      ALTER COLUMN purchase_date SET DEFAULT CURRENT_DATE;
+
+    ALTER TABLE purchases
+      ALTER COLUMN purchase_date SET NOT NULL;
     CREATE TABLE IF NOT EXISTS purchase_items (
       id UUID PRIMARY KEY,
       purchase_id UUID NOT NULL
