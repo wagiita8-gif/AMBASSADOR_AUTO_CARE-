@@ -42,15 +42,26 @@ async function initializeSalesTables(pool) {
     ALTER TABLE sales
       ALTER COLUMN invoice_number SET NOT NULL;
 
-    CREATE TABLE IF NOT EXISTS sale_items (
+        CREATE TABLE IF NOT EXISTS sale_items (
       id UUID PRIMARY KEY,
       sale_id UUID NOT NULL REFERENCES sales(id) ON DELETE CASCADE,
       product_id UUID NOT NULL REFERENCES products(id),
       product_name TEXT NOT NULL,
       sku TEXT NOT NULL,
       quantity NUMERIC(12,3) NOT NULL,
-      unit_price NUMERIC(12,2) NOT NULL
+      unit_price NUMERIC(12,2) NOT NULL,
+      line_total NUMERIC(12,2) NOT NULL
     );
+
+    ALTER TABLE sale_items
+      ADD COLUMN IF NOT EXISTS line_total NUMERIC(12,2);
+
+    UPDATE sale_items
+    SET line_total = ROUND(quantity * unit_price, 2)
+    WHERE line_total IS NULL;
+
+    ALTER TABLE sale_items
+      ALTER COLUMN line_total SET NOT NULL;
 
     CREATE TABLE IF NOT EXISTS customer_payments (
       id UUID PRIMARY KEY,
@@ -559,12 +570,12 @@ router.post("/sales", async (req, res) => {
         ]
       );
 
-      await client.query(
+          await client.query(
         `INSERT INTO sale_items (
           id, sale_id, product_id, product_name,
-          sku, quantity, unit_price
+          sku, quantity, unit_price, line_total
         )
-        VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
         [
           randomUUID(),
           saleId,
@@ -572,7 +583,8 @@ router.post("/sales", async (req, res) => {
           item.product.name,
           item.product.sku,
           item.quantity,
-          item.price
+          item.price,
+          Number((item.quantity * item.price).toFixed(2))
         ]
       );
     }
