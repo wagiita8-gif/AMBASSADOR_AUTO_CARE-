@@ -187,6 +187,9 @@ async function deleteQueuedTransaction(requestId) {
   });
 }
 
+
+let saleQueueSyncRunning = false;
+
 async function sendQueuedSale(record) {
   const auth = getAuth();
 
@@ -194,15 +197,15 @@ async function sendQueuedSale(record) {
     return false;
   }
 
-  const attempts = Number(record.attempts || 0) + 1;
-
-  await updateQueuedTransaction(record.requestId, {
-    status: 'syncing',
-    attempts,
-    lastAttemptAt: new Date().toISOString()
-  });
-
   try {
+    const attempts = Number(record.attempts || 0) + 1;
+
+    await updateQueuedTransaction(record.requestId, {
+      status: 'syncing',
+      attempts,
+      lastAttemptAt: new Date().toISOString()
+    });
+
     const response = await fetch(
       `${API_BASE}/api/shops/${record.shopId}/sales`,
       {
@@ -219,13 +222,16 @@ async function sendQueuedSale(record) {
     const data = await response.json().catch(() => ({}));
 
     if (!response.ok || !data.sale?.id) {
-      const message = data.error || 'The server could not confirm this sale.';
+      const status =
+        response.status === 401 || response.status === 403
+          ? 'blocked'
+          : response.status >= 400 && response.status < 500
+            ? 'failed'
+            : 'pending';
 
       await updateQueuedTransaction(record.requestId, {
-        status: response.status >= 400 && response.status < 500
-          ? 'failed'
-          : 'pending',
-        lastError: message
+        status,
+        lastError: data.error || 'The server could not confirm this sale.'
       });
 
       return false;
@@ -241,12 +247,61 @@ async function sendQueuedSale(record) {
     return true;
 
   } catch (error) {
-    await updateQueuedTransaction(record.requestId, {
-      status: 'pending',
-      lastError: error.message || 'Network connection failed.'
-    });
+    try {
+      await updateQueuedTransaction(record.requestId, {
+        status: 'pending',
+        lastError: error.message || 'Network connection failed.'
+      });
+    } catch (queueError) {
+      console.error('Could not update queued sale:', queueError);
+    }
 
     return false;
+  }
+}
+
+async function syncPendingSales() {
+  if (
+    saleQueueSyncRunning ||
+    !navigator.onLine ||
+    !getAuth()
+  ) {
+    return;
+  }
+
+  saleQueueSyncRunning = true;
+
+  try {
+    const auth = getAuth();
+    const records = await getQueuedTransactions(auth.shopId);
+
+    const pendingSales = records
+      .filter(record =>
+        record.type === 'sale' &&
+        (record.status === 'pending' || record.status === 'syncing')
+      )
+      .sort((a, b) =>
+        new Date(a.createdAt) - new Date(b.createdAt)
+      );
+
+    for (const record of pendingSales) {
+      if (!navigator.onLine) break;
+
+      const currentAuth = getAuth();
+
+      if (!currentAuth || currentAuth.shopId !== record.shopId) {
+        break;
+      }
+
+      await sendQueuedSale(record);
+    }
+
+    await updateConnectionStatus();
+
+  } catch (error) {
+    console.error('Sale queue sync failed:', error);
+  } finally {
+    saleQueueSyncRunning = false;
   }
 }
 
