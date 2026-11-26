@@ -2386,6 +2386,42 @@ async function adjustStock(id) {
 // MAIN RENDER
 // --------------------------------------------------
 
+function renderSaleCustomerOptions() {
+  const select = $('saleCustomer');
+  if (!select) return;
+
+  const selectedId = select.value;
+  const selectedOption = select.selectedOptions[0];
+
+  // Keep a selected customer even if a refresh temporarily omits it.
+  if (
+    selectedId &&
+    selectedOption &&
+    !db.customers.some(c => String(c.id) === selectedId)
+  ) {
+    const label = selectedOption.textContent || '';
+    const separator = label.lastIndexOf(' — ');
+
+    db.customers.unshift({
+      id: selectedId,
+      name: separator >= 0 ? label.slice(0, separator) : label,
+      phone: separator >= 0 ? label.slice(separator + 3) : '',
+      email: '',
+      address: '',
+      notes: '',
+      localOnly: false
+    });
+  }
+
+  select.innerHTML =
+    '<option value="">Walk-in customer</option>' +
+    db.customers.map(c =>
+      `<option value="${c.id}">${esc(c.name)} — ${esc(c.phone)}</option>`
+    ).join('');
+
+  if (selectedId) select.value = selectedId;
+}
+
 function render() {
   const today = new Date().toDateString();
 
