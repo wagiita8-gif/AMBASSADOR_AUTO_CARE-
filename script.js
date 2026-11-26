@@ -3021,21 +3021,53 @@ if (localStorage.getItem('ambassadors_theme') === 'dark') {
 // --------------------------------------------------
 
 
+
+
 async function updateConnectionStatus() {
   const indicator = $('connection');
   if (!indicator) return;
 
+  const auth = getAuth();
+
+  let pendingCount = 0;
+  let failedCount = 0;
+
+  if (auth) {
+    try {
+      const records = await getQueuedTransactions(auth.shopId);
+
+      pendingCount = records.filter(record =>
+        record.type === 'sale' &&
+        ['pending', 'syncing'].includes(record.status)
+      ).length;
+
+      failedCount = records.filter(record =>
+        record.type === 'sale' &&
+        ['failed', 'blocked'].includes(record.status)
+      ).length;
+
+    } catch (error) {
+      console.error('Could not read offline queue status:', error);
+    }
+  }
+
+  const queueLabel =
+    `${pendingCount} PENDING` +
+    (failedCount ? ` · ${failedCount} NEEDS ATTENTION` : '');
+
   if (!navigator.onLine) {
-    indicator.textContent = '● OFFLINE · CLOUD UNAVAILABLE';
+    indicator.textContent = auth
+      ? `● OFFLINE · ${queueLabel}`
+      : '● OFFLINE · CLOUD UNAVAILABLE';
     return;
   }
 
-  if (!getAuth()) {
+  if (!auth) {
     indicator.textContent = '● ONLINE · SIGN IN REQUIRED';
     return;
   }
 
-  indicator.textContent = '● CHECKING CLOUD...';
+  indicator.textContent = `● CHECKING CLOUD · ${queueLabel}`;
 
   try {
     const response = await fetch(
@@ -3045,14 +3077,18 @@ async function updateConnectionStatus() {
 
     const data = await response.json();
 
-    indicator.textContent =
+    const cloudStatus =
       response.ok && data.status === 'healthy'
         ? '● CLOUD CONNECTED'
         : '● CLOUD UNAVAILABLE';
+
+    indicator.textContent = `${cloudStatus} · ${queueLabel}`;
+
   } catch {
-    indicator.textContent = '● CLOUD UNAVAILABLE';
+    indicator.textContent = `● CLOUD UNAVAILABLE · ${queueLabel}`;
   }
 }
+
 window.addEventListener('online',updateConnectionStatus);
 window.addEventListener('offline',updateConnectionStatus);
 
