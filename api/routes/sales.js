@@ -132,7 +132,7 @@ router.post("/sales", async (req, res) => {
     items
   } = req.body;
 
-  if (
+    if (
     typeof receipt !== "string" ||
     !receipt.trim() ||
     typeof paymentMethod !== "string" ||
@@ -145,14 +145,15 @@ router.post("/sales", async (req, res) => {
     Number(paid) < 0
   ) {
     return res.status(400).json({ error: "Invalid sale details" });
-      if (
+  }
+
+  if (
     customerId !== null &&
     (typeof customerId !== "string" || !customerId.trim())
   ) {
     return res.status(400).json({
       error: "Invalid customer ID"
     });
-      }
   }
 
   const quantities = new Map();
