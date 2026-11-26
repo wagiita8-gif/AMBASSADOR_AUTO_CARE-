@@ -1,9 +1,9 @@
-
-
 const express = require("express");
 const { randomUUID } = require("crypto");
 
 const router = express.Router();
+
+
 
 async function initializeSalesTables(pool) {
   await pool.query(`
@@ -12,6 +12,8 @@ async function initializeSalesTables(pool) {
       shop_id UUID NOT NULL REFERENCES shops(id),
       user_id UUID NOT NULL REFERENCES users(id),
       receipt TEXT NOT NULL,
+      invoice_number TEXT NOT NULL,
+      customer_id UUID REFERENCES customers(id),
       customer_name TEXT NOT NULL DEFAULT 'Walk-in',
       payment_method TEXT NOT NULL,
       subtotal NUMERIC(12,2) NOT NULL,
@@ -24,6 +26,19 @@ async function initializeSalesTables(pool) {
       UNIQUE(shop_id, receipt)
     );
 
+    ALTER TABLE sales
+      ADD COLUMN IF NOT EXISTS invoice_number TEXT;
+
+    ALTER TABLE sales
+      ADD COLUMN IF NOT EXISTS customer_id UUID REFERENCES customers(id);
+
+    UPDATE sales
+    SET invoice_number = receipt
+    WHERE invoice_number IS NULL;
+
+    ALTER TABLE sales
+      ALTER COLUMN invoice_number SET NOT NULL;
+
     CREATE TABLE IF NOT EXISTS sale_items (
       id UUID PRIMARY KEY,
       sale_id UUID NOT NULL REFERENCES sales(id) ON DELETE CASCADE,
@@ -34,11 +49,40 @@ async function initializeSalesTables(pool) {
       unit_price NUMERIC(12,2) NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS customer_payments (
+      id UUID PRIMARY KEY,
+      shop_id UUID NOT NULL REFERENCES shops(id),
+      customer_id UUID NOT NULL REFERENCES customers(id),
+      user_id UUID NOT NULL REFERENCES users(id),
+      amount NUMERIC(12,2) NOT NULL CHECK (amount > 0),
+      method TEXT NOT NULL,
+      reference TEXT,
+      notes TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS customer_payment_allocations (
+      payment_id UUID NOT NULL REFERENCES customer_payments(id)
+        ON DELETE CASCADE,
+      sale_id UUID NOT NULL REFERENCES sales(id),
+      amount NUMERIC(12,2) NOT NULL CHECK (amount > 0),
+      PRIMARY KEY (payment_id, sale_id)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_sales_shop_date
       ON sales(shop_id, created_at DESC);
 
+    CREATE INDEX IF NOT EXISTS idx_sales_customer
+      ON sales(shop_id, customer_id);
+
     CREATE INDEX IF NOT EXISTS idx_sale_items_sale
       ON sale_items(sale_id);
+
+    CREATE INDEX IF NOT EXISTS idx_customer_payments_customer
+      ON customer_payments(shop_id, customer_id, created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_customer_payment_allocations_sale
+      ON customer_payment_allocations(sale_id);
   `);
 }
 
