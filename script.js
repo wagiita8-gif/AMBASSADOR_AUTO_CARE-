@@ -1900,16 +1900,20 @@ function render() {
       </tr>
     `).join('') || emptyRow(7,'No sales yet.');
 
-  $('recentSales').innerHTML = db.sales.length
-    ? db.sales.slice(-4).reverse().map(s => `
-        <div class="productpick">
-          <div>
-            <b>${esc(s.receipt)}</b>
-            <small>${esc(s.customerName)} · ${new Date(s.date).toLocaleString()}</small>
+    $('recentSales').innerHTML = db.sales.length
+    ? db.sales
+        .slice()
+        .sort((a, b) => new Date(b.date) - new Date(a.date))
+        .slice(0, 4)
+        .map(s => `
+          <div class="productpick">
+            <div>
+              <b>${esc(s.receipt)}</b>
+              <small>${esc(s.customerName)} · ${new Date(s.date).toLocaleString()}</small>
+            </div>
+            <b>${money(s.total)}</b>
           </div>
-          <b>${money(s.total)}</b>
-        </div>
-      `).join('')
+        `).join('')
     : '<div class="empty">No transactions yet.</div>';
 
   const low = db.products.filter(p => p.stock <= p.reorder);
