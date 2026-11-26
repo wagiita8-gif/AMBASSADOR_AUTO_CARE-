@@ -1248,14 +1248,20 @@ async function loadCloudParties(silent = false) {
       cloudRequest('suppliers')
     ]);
 
-    const localCustomers = db.customers.filter(
-      c => c.localOnly === true || String(c.id).startsWith('x')
-    );
 
-    const localSuppliers = db.suppliers.filter(
-      s => s.localOnly === true || String(s.id).startsWith('x')
-    );
+    const selectedCustomerId = $('saleCustomer')?.value || '';
 
+const selectedCustomer = db.customers.find(
+  c => c.id === selectedCustomerId
+);
+
+const localCustomers = db.customers.filter(
+  c => c.localOnly === true || String(c.id).startsWith('x')
+);
+
+const localSuppliers = db.suppliers.filter(
+  s => s.localOnly === true || String(s.id).startsWith('x')
+);
     const cloudCustomers = (customerData.customers || []).map(c => ({
       id: c.id,
       name: c.name,
@@ -1265,7 +1271,12 @@ async function loadCloudParties(silent = false) {
       notes: c.notes || '',
       localOnly: false
     }));
-
+if (
+  selectedCustomer &&
+  !cloudCustomers.some(c => c.id === selectedCustomerId)
+) {
+  cloudCustomers.push(selectedCustomer);
+}
     const cloudSuppliers = (supplierData.suppliers || []).map(s => ({
       id: s.id,
       name: s.name,
