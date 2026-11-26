@@ -2642,12 +2642,17 @@ function render() {
       `).join('')
     : '<div class="empty">Complete sales to see best sellers.</div>';
 
-  $('saleCustomer').innerHTML =
-    '<option value="">Walk-in customer</option>' +
-    db.customers.map(c =>
-      `<option value="${c.id}">${esc(c.name)} — ${esc(c.phone)}</option>`
-    ).join('');
+const selectedCustomerId = $('saleCustomer').value;
 
+$('saleCustomer').innerHTML =
+  '<option value="">Walk-in customer</option>' +
+  db.customers.map(c =>
+    `<option value="${c.id}">${esc(c.name)} — ${esc(c.phone)}</option>`
+  ).join('');
+
+if (db.customers.some(c => c.id === selectedCustomerId)) {
+  $('saleCustomer').value = selectedCustomerId;
+}
   renderSaleProducts();
   renderCart();
   renderCash();
