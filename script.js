@@ -238,7 +238,7 @@ async function loadCloudSales(silent = false) {
       id: s.id,
       receipt: s.receipt,
       date: s.created_at,
-      customerId: null,
+      customerId: s.customer_id || null,
       customerName: s.customer_name || 'Walk-in',
       payment: s.payment_method,
       subtotal: Number(s.subtotal),
