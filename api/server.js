@@ -1283,7 +1283,10 @@ app.use(
   },
   salesRouter
 );
-
+const {
+  router: purchaseRouter,
+  initializePurchaseTables
+} = require("./routes/purchase");
 // --------------------------------------------------
 // SERVER START
 // --------------------------------------------------
