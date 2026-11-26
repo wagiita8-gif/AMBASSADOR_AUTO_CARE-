@@ -1631,7 +1631,56 @@ $('clearCart').onclick = () => {
 };
 
 $('completeSale').onclick = completeSale;
+async function adjustStock(id) {
+  const product = db.products.find(p => p.id === id);
+  if (!product) return toast('Product not found.');
 
+  const input = prompt(
+    `Physical quantity counted for ${product.name}:`,
+    String(product.stock)
+  );
+
+  if (input === null) return;
+
+  const quantity = Number(input);
+
+  if (!Number.isSafeInteger(quantity) || quantity < 0) {
+    return toast('Enter a valid non-negative whole number.');
+  }
+
+  const auth = getAuth();
+  if (!auth) return toast('Please log in first.');
+
+  try {
+    const response = await fetch(
+      `${API_BASE}/api/shops/${auth.shopId}/products/${id}/stock-count`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${auth.token}`,
+          'Content-Type': 'application/json',
+          Accept: 'application/json'
+        },
+        body: JSON.stringify({
+          physicalQuantity: quantity,
+          reason: 'Physical stock count'
+        })
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || 'Stock count failed.');
+    }
+
+    await loadCloudProducts(true);
+    render();
+    toast('Physical stock count recorded.');
+  } catch (error) {
+    toast(error.message || 'Could not update stock.');
+  }
+}
 // --------------------------------------------------
 // MAIN RENDER
 // --------------------------------------------------
