@@ -180,6 +180,23 @@ router.post("/sales", async (req, res) => {
     await client.query("BEGIN");
     transactionStarted = true;
 
+        let verifiedCustomer = null;
+
+    if (customerId) {
+      const customerResult = await client.query(
+        `SELECT id, name
+         FROM customers
+         WHERE id = $1 AND shop_id = $2
+         FOR UPDATE`,
+        [customerId, req.shopId]
+      );
+
+      if (!customerResult.rows.length) {
+        throw new Error("Selected customer was not found.");
+      }
+
+      verifiedCustomer = customerResult.rows[0];
+    }
     const saleItems = [];
     let subtotal = 0;
 
