@@ -145,6 +145,14 @@ router.post("/sales", async (req, res) => {
     Number(paid) < 0
   ) {
     return res.status(400).json({ error: "Invalid sale details" });
+      if (
+    customerId !== null &&
+    (typeof customerId !== "string" || !customerId.trim())
+  ) {
+    return res.status(400).json({
+      error: "Invalid customer ID"
+    });
+      }
   }
 
   const quantities = new Map();
