@@ -377,6 +377,14 @@ document.addEventListener('click', e => {
 function closeModal() {
   $('modalBack').classList.remove('open');
 }
+$('modalClose').onclick = closeModal;
+$('modalCancel').onclick = closeModal;
+
+$('modalBack').onclick = e => {
+  if (e.target === $('modalBack')) {
+    closeModal();
+  }
+};
 function openModal(title, fields, onSave) {
   $('modalTitle').textContent = title;
 
