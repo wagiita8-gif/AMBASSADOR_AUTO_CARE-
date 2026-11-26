@@ -708,10 +708,11 @@ async function loadCloudCustomerPayments(silent = false) {
 let cloudSyncTimer = null;
 let cloudSyncRunning = false;
 
+
 function startCloudSync() {
   if (cloudSyncTimer) clearInterval(cloudSyncTimer);
 
-  cloudSyncTimer = setInterval(async () => {
+  const runSync = async () => {
     if (
       !getAuth() ||
       !navigator.onLine ||
@@ -722,7 +723,11 @@ function startCloudSync() {
     cloudSyncRunning = true;
 
     try {
-            await Promise.all([
+      // Send saved offline sales first.
+      await syncPendingSales();
+
+      // Then refresh shared cloud records.
+      await Promise.all([
         loadCloudPurchases(true),
         loadCloudSupplierPayments(true),
         loadCloudProducts(true),
@@ -734,10 +739,17 @@ function startCloudSync() {
       if (document.querySelector('#page-sales')?.classList.contains('active')) {
         renderSaleProducts();
       }
+
+    } catch (error) {
+      console.error('Automatic cloud sync failed:', error);
     } finally {
       cloudSyncRunning = false;
     }
-  }, 5000);
+  };
+
+  // Try immediately after login, then every five seconds.
+  runSync();
+  cloudSyncTimer = setInterval(runSync, 5000);
 }
 
 document.addEventListener('pos:authenticated', async () => {
