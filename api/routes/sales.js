@@ -503,10 +503,10 @@ router.post("/sales", async (req, res) => {
       );
     }
     const saleId = randomUUID();
+    
     const status =
-      balance === 0 ? "Paid" :
-      paidAmount === 0 ? "Credit" : "Part paid";
-
+      balance === 0 ? "completed" :
+      paidAmount === 0 ? "credit" : "partial";
          await client.query(
       `INSERT INTO sales (
         id, shop_id, user_id, created_by, receipt, invoice_number,
