@@ -48,7 +48,21 @@
 <section class="page" id="page-reports"><div class="pagehead"><div><h1>Reports</h1><p class="intro">Summary of local demo records. Estimates are not audited accounts.</p></div><button class="btn secondary" id="exportCsv">Export sales CSV</button></div><div class="stats" style="grid-template-columns:repeat(3,1fr)"><div class="card"><div class="statlabel">Sales total</div><div class="statvalue" id="reportSales">KSh 0</div></div><div class="card"><div class="statlabel">Estimated gross profit</div><div class="statvalue" id="reportProfit">KSh 0</div></div><div class="card"><div class="statlabel">Expenses</div><div class="statvalue" id="reportExpenses">KSh 0</div></div></div><div class="card"><div class="panelhead"><h2>Best-selling products</h2><small>By units sold</small></div><div id="bestSellers"></div></div></section>
 <section class="page" id="page-settings"><div class="pagehead"><div><h1>Settings & Backup</h1><p class="intro">Local prototype settings and data protection.</p></div></div><div class="card"><h2 style="font-size:14px;margin-top:0">Shop profile</h2><div class="formgrid" id="settingsFields"></div><div class="formactions"><button class="btn primary" id="saveSettings">Save settings</button></div></div><div class="card" style="margin-top:13px"><h2 style="font-size:14px;margin-top:0">Local data & backup</h2><p class="notice">Records are stored in this browser/device only. This prototype does not synchronize with the Angular backend or other phones. Export backups regularly.</p><div class="toolbar" style="margin-top:12px"><button class="btn secondary" id="exportBackup">Download JSON backup</button><label class="btn secondary" for="importBackup">Import JSON backup</label><input id="importBackup" type="file" accept="application/json" hidden><button class="btn secondary" id="restoreSample">Restore sample data</button><button class="btn danger" id="clearAll">Delete all local data</button></div><p class="notice">No real M-Pesa, card, bank, tax authority, cloud sync or user authentication connection is active.</p></div></section>
 </div></main></div>
-<nav class="mobile" id="mobileNav"><button class="active" data-page="home"><span>▦</span>Home</button><button data-page="products"><span>▤</span>Products</button><button data-page="sales"><span>🛒</span>Sales</button><button data-page="customers"><span>♙</span>Credit</button><button data-page="settings"><span>⚙</span>Settings</button></nav>
+
+<nav class="mobile" id="mobileNav">
+  <button class="active" data-page="home"><span>▦</span>Home</button>
+  <button data-page="products"><span>▤</span>Products</button>
+  <button data-page="sales"><span>🛒</span>Sales</button>
+  <button data-page="inventory"><span>◫</span>Inventory</button>
+  <button data-page="suppliers"><span>♧</span>Suppliers</button>
+  <button data-page="purchases"><span>＋</span>Purchases</button>
+  <button data-page="customers"><span>♙</span>Credit</button>
+  <button data-page="expenses"><span>↗</span>Expenses</button>
+  <button data-page="cash"><span>▣</span>Cash</button>
+  <button data-page="reports"><span>▥</span>Reports</button>
+  <button data-page="settings"><span>⚙</span>Settings</button>
+</nav>
+ 
 <button class="themeToggle" id="themeToggle" aria-label="Toggle dark mode">🌙</button>
 <div class="modalback" id="modalBack"><div class="modal"><div class="modalhead"><h2 id="modalTitle">Form</h2><button class="close" id="modalClose">×</button></div><form id="modalForm"><div id="modalFields" class="formgrid"></div><div class="formactions"><button type="button" class="btn secondary" id="modalCancel">Cancel</button><button class="btn primary" type="submit">Save</button></div></form></div></div><div class="toast" id="toast"></div>
 <script>
