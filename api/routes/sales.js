@@ -562,6 +562,7 @@ router.post("/sales", async (req, res) => {
         saleId,
         req.shopId,
         req.user.userId,
+        requestId,
         receipt.trim(),
         receipt.trim(),
         verifiedCustomer ? verifiedCustomer.id : null,
