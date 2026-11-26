@@ -57,9 +57,140 @@ function load() {
 }
 
 
+
+const OFFLINE_DB_NAME = 'ambassadors_auto_care_queue_v1';
+const OFFLINE_STORE_NAME = 'transactions';
+
+let offlineQueueDatabase = null;
+
+function openOfflineQueueDB() {
+  if (offlineQueueDatabase) return Promise.resolve(offlineQueueDatabase);
+
+  return new Promise((resolve, reject) => {
+    if (!window.indexedDB) {
+      reject(new Error('This browser does not support offline storage.'));
+      return;
+    }
+
+    const request = indexedDB.open(OFFLINE_DB_NAME, 1);
+
+    request.onupgradeneeded = () => {
+      const database = request.result;
+
+      if (!database.objectStoreNames.contains(OFFLINE_STORE_NAME)) {
+        database.createObjectStore(OFFLINE_STORE_NAME, {
+          keyPath: 'requestId'
+        });
+      }
+    };
+
+    request.onsuccess = () => {
+      offlineQueueDatabase = request.result;
+
+      offlineQueueDatabase.onversionchange = () => {
+        offlineQueueDatabase.close();
+        offlineQueueDatabase = null;
+      };
+
+      resolve(offlineQueueDatabase);
+    };
+
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function saveQueuedTransaction(record) {
+  const database = await openOfflineQueueDB();
+
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(
+      OFFLINE_STORE_NAME,
+      'readwrite'
+    );
+
+    transaction.objectStore(OFFLINE_STORE_NAME).put(record);
+
+    transaction.oncomplete = () => resolve(record);
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error);
+  });
+}
+
+async function getQueuedTransactions(shopId) {
+  const database = await openOfflineQueueDB();
+
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(
+      OFFLINE_STORE_NAME,
+      'readonly'
+    );
+
+    const request = transaction
+      .objectStore(OFFLINE_STORE_NAME)
+      .getAll();
+
+    request.onsuccess = () => {
+      resolve(
+        request.result.filter(item => item.shopId === shopId)
+      );
+    };
+
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function updateQueuedTransaction(requestId, changes) {
+  const database = await openOfflineQueueDB();
+
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(
+      OFFLINE_STORE_NAME,
+      'readwrite'
+    );
+
+    const store = transaction.objectStore(OFFLINE_STORE_NAME);
+    const request = store.get(requestId);
+
+    request.onsuccess = () => {
+      if (!request.result) {
+        transaction.abort();
+        return;
+      }
+
+      store.put({
+        ...request.result,
+        ...changes,
+        requestId
+      });
+    };
+
+    transaction.oncomplete = () => resolve(true);
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error);
+  });
+}
+
+async function deleteQueuedTransaction(requestId) {
+  const database = await openOfflineQueueDB();
+
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(
+      OFFLINE_STORE_NAME,
+      'readwrite'
+    );
+
+    transaction.objectStore(OFFLINE_STORE_NAME).delete(requestId);
+
+    transaction.oncomplete = () => resolve(true);
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error);
+  });
+}
+
 let db = load();
 let cart = [];
 let activeSaleRequestId = null;
+
 const titles = {
   home:'Dashboard',
   products:'Products',
