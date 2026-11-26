@@ -1301,10 +1301,10 @@ app.use(
 // SERVER START
 // --------------------------------------------------
 
-async function startServer()
-await initializePurchaseTables(pool);{
+async function startServer() {
   try {
     await initializeSalesTables(pool);
+    await initializePurchaseTables(pool);
 
     app.listen(PORT, () => {
       console.log(
