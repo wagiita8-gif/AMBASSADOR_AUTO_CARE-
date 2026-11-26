@@ -579,7 +579,6 @@ async function productForm(id) {
   });
 }
 
-function productForm(id) {
 
 
 function makeSku(name) {
