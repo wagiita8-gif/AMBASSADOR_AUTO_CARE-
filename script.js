@@ -1031,7 +1031,99 @@ function customerBalance(id) {
     .filter(s => s.customerId === id)
     .reduce((a, s) => a + Number(s.balance || 0), 0);
 }
+async function payCustomer(id) {
+  const customer = db.customers.find(c => c.id === id);
+  const due = customerBalance(id);
+  const auth = getAuth();
 
+  if (!customer) {
+    return toast('Customer not found.');
+  }
+
+  if (!auth) {
+    return toast('Please log in first.');
+  }
+
+  if (!navigator.onLine) {
+    return toast('Internet connection required to record customer payments.');
+  }
+
+  if (due <= 0) {
+    return toast('No outstanding customer balance.');
+  }
+
+  openModal('Receive payment — ' + customer.name, [
+    {
+      name: 'amount',
+      label: 'Payment amount (KSh)',
+      type: 'number',
+      min: 0.01,
+      max: due,
+      step: '0.01',
+      required: true
+    },
+    {
+      name: 'method',
+      label: 'Payment method',
+      type: 'select',
+      options: ['Cash', 'M-Pesa', 'Bank', 'Card', 'Other']
+    },
+    {
+      name: 'reference',
+      label: 'Reference'
+    },
+    {
+      name: 'notes',
+      label: 'Notes',
+      type: 'textarea'
+    }
+  ], async d => {
+    const amount = Number(d.amount);
+
+    if (
+      !Number.isFinite(amount) ||
+      amount <= 0 ||
+      amount > due ||
+      Math.round(amount * 100) !== amount * 100
+    ) {
+      toast('Enter a valid amount not exceeding the outstanding balance.');
+      return false;
+    }
+
+    const response = await fetch(
+      `${API_BASE}/api/shops/${auth.shopId}/customer-payments`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${auth.token}`,
+          'Content-Type': 'application/json',
+          Accept: 'application/json'
+        },
+        body: JSON.stringify({
+          customerId: id,
+          amount,
+          method: d.method,
+          reference: d.reference,
+          notes: d.notes
+        })
+      }
+    );
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(data.error || 'Customer payment failed.');
+    }
+
+    await Promise.all([
+      loadCloudSales(),
+      loadCloudCustomerPayments()
+    ]);
+
+    render();
+    toast('Customer payment recorded successfully.');
+  });
+}
     
 
 // --------------------------------------------------
