@@ -31,7 +31,13 @@ async function initializeSalesTables(pool) {
 
        ALTER TABLE sales
       ADD COLUMN IF NOT EXISTS created_by UUID REFERENCES users(id);
-      
+          ALTER TABLE sales
+      ADD COLUMN IF NOT EXISTS request_id UUID;
+
+    CREATE UNIQUE INDEX IF NOT EXISTS
+      idx_sales_shop_request_id
+      ON sales(shop_id, request_id)
+      WHERE request_id IS NOT NULL;
     ALTER TABLE sales
       ADD COLUMN IF NOT EXISTS customer_id UUID REFERENCES customers(id);
 
@@ -391,6 +397,14 @@ router.post("/sales", async (req, res) => {
   } = req.body;
 
     if (
+    typeof requestId !== "string" ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestId)
+  ) {
+    return res.status(400).json({
+      error: "A valid sale request ID is required"
+    });
+  }
+    if (
     typeof receipt !== "string" ||
     !receipt.trim() ||
     typeof paymentMethod !== "string" ||
@@ -439,6 +453,24 @@ router.post("/sales", async (req, res) => {
     await client.query("BEGIN");
     transactionStarted = true;
 
+        const existingSale = await client.query(
+      `SELECT id, receipt, subtotal, discount, total,
+              paid, balance, status
+       FROM sales
+       WHERE shop_id = $1 AND request_id = $2`,
+      [req.shopId, requestId]
+    );
+
+    if (existingSale.rows.length) {
+      await client.query("COMMIT");
+      transactionStarted = false;
+
+      return res.status(200).json({
+        message: "Sale was already saved",
+        sale: existingSale.rows[0],
+        alreadyProcessed: true
+      });
+    }
         let verifiedCustomer = null;
 
     if (customerId) {
