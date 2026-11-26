@@ -1287,11 +1287,22 @@ const {
   router: purchaseRouter,
   initializePurchaseTables
 } = require("./routes/purchase");
+app.use(
+  "/api/shops/:shopId",
+  authenticateToken,
+  requireShopRole(["owner", "manager", "staff"]),
+  (req, res, next) => {
+    req.shopId = req.params.shopId;
+    next();
+  },
+  purchaseRouter
+);
 // --------------------------------------------------
 // SERVER START
 // --------------------------------------------------
 
-async function startServer() {
+async function startServer()
+await initializePurchaseTables(pool);{
   try {
     await initializeSalesTables(pool);
 
