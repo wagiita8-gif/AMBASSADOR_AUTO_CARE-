@@ -187,6 +187,69 @@ async function deleteQueuedTransaction(requestId) {
   });
 }
 
+async function sendQueuedSale(record) {
+  const auth = getAuth();
+
+  if (!auth || auth.shopId !== record.shopId || !navigator.onLine) {
+    return false;
+  }
+
+  const attempts = Number(record.attempts || 0) + 1;
+
+  await updateQueuedTransaction(record.requestId, {
+    status: 'syncing',
+    attempts,
+    lastAttemptAt: new Date().toISOString()
+  });
+
+  try {
+    const response = await fetch(
+      `${API_BASE}/api/shops/${record.shopId}/sales`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${auth.token}`,
+          'Content-Type': 'application/json',
+          Accept: 'application/json'
+        },
+        body: JSON.stringify(record.payload)
+      }
+    );
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok || !data.sale?.id) {
+      const message = data.error || 'The server could not confirm this sale.';
+
+      await updateQueuedTransaction(record.requestId, {
+        status: response.status >= 400 && response.status < 500
+          ? 'failed'
+          : 'pending',
+        lastError: message
+      });
+
+      return false;
+    }
+
+    await updateQueuedTransaction(record.requestId, {
+      status: 'synced',
+      serverSaleId: data.sale.id,
+      syncedAt: new Date().toISOString(),
+      lastError: null
+    });
+
+    return true;
+
+  } catch (error) {
+    await updateQueuedTransaction(record.requestId, {
+      status: 'pending',
+      lastError: error.message || 'Network connection failed.'
+    });
+
+    return false;
+  }
+}
+
 let db = load();
 let cart = [];
 let activeSaleRequestId = null;
@@ -1872,7 +1935,6 @@ window.addEventListener('pagehide', stopCameraScanner);
 // --------------------------------------------------
 // CLOUD CHECKOUT
 // --------------------------------------------------
-
 async function completeSale() {
   if (!cart.length) {
     return toast('Add products to the cart first.');
@@ -1884,11 +1946,11 @@ async function completeSale() {
     return toast('Please log in before recording a sale.');
   }
 
-  if (!navigator.onLine) {
-    return toast('Internet connection required for cloud checkout.');
+  if (!crypto.randomUUID) {
+    return toast('This browser cannot create a secure sale ID.');
   }
 
-  const subtotal = cart.reduce((sum,item) => {
+  const subtotal = cart.reduce((sum, item) => {
     const product = db.products.find(p => p.id === item.id);
     return sum + (product ? product.price * item.qty : 0);
   }, 0);
@@ -1906,18 +1968,19 @@ async function completeSale() {
     return toast('Discount cannot exceed subtotal.');
   }
 
-  if (!Number.isFinite(paid) || paid < 0 || paid > total) {
+  if (
+    !Number.isFinite(paid) ||
+    paid < 0 ||
+    paid > total ||
+    Math.round(paid * 100) !== paid * 100
+  ) {
     return toast('Enter a valid payment amount.');
-  }
-
-  // Shared credit sales are not implemented on the backend yet.
-    if (Math.round(paid * 100) !== paid * 100) {
-    return toast('Payment must be a valid amount in cents.');
   }
 
   if (paid < total && !customerId) {
     return toast('Select a customer before recording a credit sale.');
   }
+
   for (const item of cart) {
     const product = db.products.find(p => p.id === item.id);
 
@@ -1925,74 +1988,79 @@ async function completeSale() {
       return toast('Stock changed; review your cart.');
     }
   }
-  if (!activeSaleRequestId) {
-    activeSaleRequestId = crypto.randomUUID();
-}
+
+  const requestId = crypto.randomUUID();
+
   const receipt =
     'AA-' +
     Date.now().toString() +
     '-' +
-    Math.random().toString(36).slice(2,6).toUpperCase()
+    Math.random().toString(36).slice(2, 6).toUpperCase();
 
-      const payload = {
-    requestId: activeSaleRequestId,
+  const payload = {
+    requestId,
     receipt,
     customerId,
-    customerName:customer?.name || 'Walk-in',
-    paymentMethod:paid === 0 ? 'Credit' : $('paymentMethod').value,
+    customerName: customer?.name || 'Walk-in',
+    paymentMethod: paid === 0 ? 'Credit' : $('paymentMethod').value,
     discount,
     paid,
-    items:cart.map(item => ({
-      productId:item.id,
-      qty:item.qty
+    items: cart.map(item => ({
+      productId: item.id,
+      qty: item.qty
     }))
+  };
+
+  const record = {
+    requestId,
+    shopId: auth.shopId,
+    type: 'sale',
+    payload,
+    status: 'pending',
+    attempts: 0,
+    createdAt: new Date().toISOString(),
+    lastError: null
   };
 
   const button = $('completeSale');
   button.disabled = true;
 
   try {
-    const response = await fetch(
-      `${API_BASE}/api/shops/${auth.shopId}/sales`,
-      {
-        method:'POST',
-        headers:{
-          Authorization:`Bearer ${auth.token}`,
-          'Content-Type':'application/json',
-          Accept:'application/json'
-        },
-        body:JSON.stringify(payload)
-      }
-    );
+    // Save the complete transaction before attempting cloud delivery.
+    await saveQueuedTransaction(record);
 
-    const data = await response.json().catch(() => ({}));
-
-    if (!response.ok) {
-      throw new Error(data.error || 'Sale could not be saved.');
-    }
-
-    if (!data.sale?.id) {
-      throw new Error('The server response did not include a sale ID.');
-    }
-
-    // The server has saved the sale and deducted stock.
+    // The saved transaction can now survive a page reload.
     cart = [];
-
     activeSaleRequestId = null;
+
     $('discount').value = 0;
     $('amountPaid').value = '';
     $('saleCustomer').value = '';
 
-    await loadCloudProducts();
-    await loadCloudSales();
+    renderCart();
 
-    toast('Sale saved to the cloud!');
+    if (!navigator.onLine) {
+      toast('Sale saved on this device. Waiting for internet sync.');
+      return;
+    }
 
-    viewReceipt(data.sale.id);
+    const synced = await sendQueuedSale(record);
+
+    if (synced) {
+      await Promise.all([
+        loadCloudProducts(true),
+        loadCloudSales(true)
+      ]);
+
+      toast('Sale saved to the cloud!');
+      return;
+    }
+
+    toast('Sale saved locally. Cloud sync is still pending.');
 
   } catch (error) {
-    console.error('Cloud checkout failed:', error);
-    toast(error.message || 'Sale failed. Please try again.');
+    console.error('Sale queue error:', error);
+    toast('Sale was not queued. Your cart has been kept.');
   } finally {
     button.disabled = false;
   }
