@@ -1288,8 +1288,9 @@ if (
     }));
 
     db.customers = [...cloudCustomers, ...localCustomers];
+    renderSaleCustomerOptions();
     db.suppliers = [...cloudSuppliers, ...localSuppliers];
-
+    
     save();
     return true;
 
@@ -1420,8 +1421,9 @@ function customerForm() {
         address: c.address || '',
         notes: c.notes || '',
         localOnly: false
+        
       });
-
+      renderSaleCustomerOptions();
       save();
       toast('Customer saved to shared cloud.');
 
@@ -2689,48 +2691,7 @@ function render() {
       `).join('')
     : '<div class="empty">Complete sales to see best sellers.</div>';
 
-const saleCustomerSelect = $('saleCustomer');
-const selectedCustomerId = saleCustomerSelect.value;
-const selectedCustomerOption =
-  saleCustomerSelect.selectedOptions[0];
 
-if (
-  selectedCustomerId &&
-  selectedCustomerOption &&
-  !db.customers.some(c => String(c.id) === selectedCustomerId)
-) {
-  const label = selectedCustomerOption.textContent || '';
-  const separator = label.lastIndexOf(' — ');
-
-  db.customers.unshift({
-    id: selectedCustomerId,
-    name: separator >= 0
-      ? label.slice(0, separator)
-      : label,
-    phone: separator >= 0
-      ? label.slice(separator + 3)
-      : '',
-    email: '',
-    address: '',
-    notes: '',
-    localOnly: false
-  });
-}
-
-saleCustomerSelect.innerHTML =
-  '<option value="">Walk-in customer</option>' +
-  db.customers.map(c =>
-    `<option value="${c.id}">${esc(c.name)} — ${esc(c.phone)}</option>`
-  ).join('');
-
-if (
-  selectedCustomerId &&
-  db.customers.some(c => String(c.id) === selectedCustomerId)
-) {
-  saleCustomerSelect.value = selectedCustomerId;
-}
-
-  
   renderSaleProducts();
   renderCart();
   renderCash();
@@ -3179,10 +3140,11 @@ window.addEventListener('offline',updateConnectionStatus);
 // INITIALIZE
 // --------------------------------------------------
 
+
 loadSettings();
+renderSaleCustomerOptions();
 render();
 updateConnectionStatus();
-
       
 if (getAuth()) {
   startCloudSync();
