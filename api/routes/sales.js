@@ -386,7 +386,8 @@ router.post("/customer-payments", async (req, res) => {
 });
 router.post("/sales", async (req, res) => {
   const pool = req.app.locals.pool;
-    const {
+  const {
+    requestId,
     receipt,
     customerId = null,
     customerName,
@@ -395,7 +396,6 @@ router.post("/sales", async (req, res) => {
     paid,
     items
   } = req.body;
-
     if (
     typeof requestId !== "string" ||
     !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestId)
@@ -552,11 +552,12 @@ router.post("/sales", async (req, res) => {
       paidAmount === 0 ? "credit" : "partial";
          await client.query(
       `INSERT INTO sales (
-        id, shop_id, user_id, created_by, receipt, invoice_number,
-        customer_id, customer_name, payment_method,
-        subtotal, discount, total, paid, balance, status
+        id, shop_id, user_id, created_by, request_id,
+        receipt, invoice_number, customer_id, customer_name,
+        payment_method, subtotal, discount, total, paid,
+        balance, status
       )
-      VALUES ($1,$2,$3,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+      VALUES ($1,$2,$3,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
       [
         saleId,
         req.shopId,
