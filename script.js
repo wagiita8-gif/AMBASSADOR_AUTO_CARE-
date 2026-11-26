@@ -346,9 +346,10 @@ function startCloudSync() {
 
     try {
             await Promise.all([
-        loadCloudProducts(true),
+                loadCloudProducts(true),
         loadCloudSales(true),
-        loadCloudCustomerPayments(true)
+        loadCloudCustomerPayments(true),
+        loadCloudParties(true)
       ]);
 
       if (document.querySelector('#page-sales')?.classList.contains('active')) {
@@ -845,8 +846,7 @@ async function cloudRequest(path, options = {}) {
   return data;
 }
 
-
-async function loadCloudParties() {
+async function loadCloudParties(silent = false) {
   if (!getAuth()) return false;
 
   try {
@@ -891,7 +891,11 @@ async function loadCloudParties() {
 
   } catch (error) {
     console.error('Cloud parties loading failed:', error);
-    toast('Could not load shared customers and suppliers.');
+
+    if (!silent) {
+      toast('Could not load shared customers and suppliers.');
+    }
+
     return false;
   }
 }
