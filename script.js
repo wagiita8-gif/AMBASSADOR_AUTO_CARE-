@@ -1271,55 +1271,91 @@ function supplierBalance(id) {
     .reduce((a,p) => a + p.balance, 0);
 }
 
+
 function paySupplier(id) {
   const s = db.suppliers.find(x => x.id === id);
   const due = supplierBalance(id);
+  const auth = getAuth();
 
-  if (!s || due <= 0) return toast('No outstanding supplier balance.');
+  if (!s || due <= 0) {
+    return toast('No outstanding supplier balance.');
+  }
+
+  if (!auth || !navigator.onLine) {
+    return toast('Connect to the internet to record this payment.');
+  }
+
+  if (!crypto.randomUUID) {
+    return toast('This browser cannot create a secure payment ID.');
+  }
+
+  const requestId = crypto.randomUUID();
 
   openModal('Pay supplier — ' + s.name, [
-    {name:'amount',label:'Payment amount (KSh)',type:'number',min:.01,step:'.01',required:true},
-    {name:'method',label:'Payment method',type:'select',options:['Cash','M-Pesa','Bank','Card','Other']},
+    {
+      name:'amount',
+      label:'Payment amount (KSh)',
+      type:'number',
+      min:.01,
+      step:'.01',
+      required:true
+    },
+    {
+      name:'method',
+      label:'Payment method',
+      type:'select',
+      options:['Cash','M-Pesa','Bank','Card','Other']
+    },
     {name:'reference',label:'Reference'},
     {name:'notes',label:'Notes'}
-  ], d => {
+  ], async d => {
     const amount = Number(d.amount);
 
-    if (!Number.isFinite(amount) || amount <= 0 || amount > due) {
-      toast('Payment must not exceed outstanding balance.');
+    if (
+      !Number.isFinite(amount) ||
+      amount <= 0 ||
+      amount > due ||
+      Math.round(amount * 100) !== amount * 100
+    ) {
+      toast('Enter a valid payment not exceeding the balance.');
       return false;
     }
 
-    let left = amount;
+    const response = await fetch(
+      `${API_BASE}/api/shops/${auth.shopId}/supplier-payments`,
+      {
+        method:'POST',
+        headers:{
+          Authorization:`Bearer ${auth.token}`,
+          'Content-Type':'application/json',
+          Accept:'application/json'
+        },
+        body:JSON.stringify({
+          requestId,
+          supplierId:id,
+          amount,
+          method:d.method,
+          reference:d.reference || '',
+          notes:d.notes || ''
+        })
+      }
+    );
 
-    db.purchases
-      .filter(p => p.supplierId === id && p.balance > 0)
-      .sort((a,b) => new Date(a.date) - new Date(b.date))
-      .forEach(p => {
-        if (left <= 0) return;
+    const result = await response.json();
 
-        const n = Math.min(left,p.balance);
+    if (!response.ok) {
+      throw new Error(result.error || 'Could not record supplier payment.');
+    }
 
-        p.balance = +(p.balance - n).toFixed(2);
-        p.paid = +(p.paid + n).toFixed(2);
+    await Promise.all([
+      loadCloudPurchases(true),
+      loadCloudSupplierPayments(true)
+    ]);
 
-        left = +(left - n).toFixed(2);
-      });
-
-    db.supplierPayments.push({
-      id:uid(),
-      supplierId:id,
-      amount,
-      method:d.method,
-      reference:d.reference,
-      date:new Date().toISOString(),
-      notes:d.notes
-    });
-
-    save();
-    toast('Supplier payment recorded.');
+    toast('Supplier payment recorded in the cloud.');
   });
 }
+
 
 // --------------------------------------------------
 // EXPENSES
@@ -1371,95 +1407,190 @@ function deleteExpense(id) {
 // PURCHASES
 // --------------------------------------------------
 
+
+
 function purchaseForm() {
   if (!db.suppliers.length) {
     toast('Add a supplier first.');
     return;
   }
 
-  const supplierOpts = db.suppliers.map(s => ({
-    value:s.id,
-    label:s.name
-  }));
+  if (!db.products.length) {
+    toast('Add a product first.');
+    return;
+  }
 
-  const productOpts = db.products.map(p => ({
-    value:p.id,
-    label:p.name + ' (' + p.sku + ')'
-  }));
+  const auth = getAuth();
+
+  if (!auth || !navigator.onLine) {
+    toast('Connect to the internet to record a cloud purchase.');
+    return;
+  }
+
+  if (!crypto.randomUUID) {
+    toast('This browser cannot create a secure purchase ID.');
+    return;
+  }
+
+  const requestId = crypto.randomUUID();
+
+  const supplierOpts = db.suppliers
+    .filter(s => !s.localOnly)
+    .map(s => ({
+      value:s.id,
+      label:s.name
+    }));
+
+  const productOpts = db.products
+    .filter(p => !p.localOnly)
+    .map(p => ({
+      value:p.id,
+      label:p.name + ' (' + p.sku + ')'
+    }));
+
+  if (!supplierOpts.length || !productOpts.length) {
+    toast('Cloud suppliers and products must be loaded first.');
+    return;
+  }
 
   openModal('Record supplier purchase', [
-    {name:'supplierId',label:'Supplier',type:'select',options:supplierOpts,required:true},
+    {
+      name:'supplierId',
+      label:'Supplier',
+      type:'select',
+      options:supplierOpts,
+      required:true
+    },
     {name:'invoice',label:'Supplier invoice number'},
-    {name:'productId',label:'Product received',type:'select',options:productOpts,required:true},
-    {name:'qty',label:'Quantity received',type:'number',min:.001,step:'.001',required:true},
-    {name:'unitCost',label:'Buying price per unit',type:'number',min:0,step:'.01',required:true},
-    {name:'paidNow',label:'Amount paid now',type:'number',min:0,step:'.01',value:0,required:true},
-    {name:'method',label:'Payment method',type:'select',options:['Cash','M-Pesa','Bank','Card','Other']},
-    {name:'date',label:'Purchase date',type:'date',value:new Date().toISOString().slice(0,10)}
-  ], d => {
+    {
+      name:'productId',
+      label:'Product received',
+      type:'select',
+      options:productOpts,
+      required:true
+    },
+    {
+      name:'qty',
+      label:'Quantity received',
+      type:'number',
+      min:.001,
+      step:'.001',
+      required:true
+    },
+    {
+      name:'unitCost',
+      label:'Buying price per unit',
+      type:'number',
+      min:0,
+      step:'.01',
+      required:true
+    },
+    {
+      name:'paidNow',
+      label:'Amount paid now',
+      type:'number',
+      min:0,
+      step:'.01',
+      value:0,
+      required:true
+    },
+    {
+      name:'method',
+      label:'Payment method',
+      type:'select',
+      options:['Cash','M-Pesa','Bank','Card','Other']
+    },
+    {
+      name:'date',
+      label:'Purchase date',
+      type:'date',
+      value:new Date().toISOString().slice(0,10)
+    }
+  ], async d => {
     const p = db.products.find(x => x.id === d.productId);
+    const supplier = db.suppliers.find(x => x.id === d.supplierId);
+
     const qty = Number(d.qty);
     const cost = Number(d.unitCost);
-    const total = qty * cost;
     const paid = Number(d.paidNow);
+    const total = Math.round(qty * cost * 100) / 100;
 
-    if (!p || qty <= 0 || cost < 0 || paid < 0 || paid > total ||
-        ![qty,cost,paid].every(Number.isFinite)) {
-      toast('Check quantity, cost and payment values.');
+    if (
+      !p ||
+      !supplier ||
+      qty <= 0 ||
+      cost < 0 ||
+      paid < 0 ||
+      paid > total ||
+      ![qty,cost,paid].every(Number.isFinite) ||
+      Math.round(qty * 1000) !== qty * 1000 ||
+      Math.round(cost * 100) !== cost * 100 ||
+      Math.round(paid * 100) !== paid * 100 ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(d.date || '')
+    ) {
+      toast('Check supplier, product, date, quantity and payment.');
       return false;
     }
 
-    p.stock = +(p.stock + qty).toFixed(3);
-    p.cost = cost;
-
-    const purchase = {
-      id:uid(),
-      supplierId:d.supplierId,
-      invoice:d.invoice || 'PUR-' + Date.now(),
-      date:d.date || new Date().toISOString().slice(0,10),
-      items:[{productId:p.id,name:p.name,qty,unitCost:cost}],
-      total:+total.toFixed(2),
-      paid:+paid.toFixed(2),
-      balance:+(total-paid).toFixed(2),
-      method:d.method
-    };
-
-    db.purchases.push(purchase);
-
-    const s = db.suppliers.find(x => x.id === d.supplierId);
-
-    if (s) {
-      p.supplierLinks = p.supplierLinks || [];
-
-      const link = p.supplierLinks.find(l => l.supplierId === s.id);
-
-      if (link) {
-        link.price = cost;
-      } else {
-        p.supplierLinks.push({
-          supplierId:s.id,
-          price:cost,
-          status:p.supplierLinks.some(l => l.status === 'preferred')
-            ? 'alternative'
-            : 'preferred'
-        });
+    const response = await fetch(
+      `${API_BASE}/api/shops/${auth.shopId}/purchases`,
+      {
+        method:'POST',
+        headers:{
+          Authorization:`Bearer ${auth.token}`,
+          'Content-Type':'application/json',
+          Accept:'application/json'
+        },
+        body:JSON.stringify({
+          requestId,
+          supplierId:d.supplierId,
+          invoiceNumber:d.invoice || '',
+          productId:d.productId,
+          quantity:qty,
+          unitCost:cost,
+          paid,
+          paymentMethod:d.method,
+          purchaseDate:d.date,
+          notes:''
+        })
       }
+    );
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      throw new Error(result.error || 'Could not record purchase.');
     }
 
-    if (paid > 0) {
-      db.supplierPayments.push({
-        id:uid(),
-        supplierId:d.supplierId,
-        amount:paid,
-        method:d.method,
-        reference:d.invoice,
-        date:new Date().toISOString(),
-        purchaseId:purchase.id
+    p.cost = cost;
+
+    p.supplierLinks = p.supplierLinks || [];
+
+    const link = p.supplierLinks.find(
+      item => item.supplierId === supplier.id
+    );
+
+    if (link) {
+      link.price = cost;
+    } else {
+      p.supplierLinks.push({
+        supplierId:supplier.id,
+        price:cost,
+        status:p.supplierLinks.some(
+          item => item.status === 'preferred'
+        ) ? 'alternative' : 'preferred'
       });
     }
 
     save();
-    toast('Purchase recorded locally.');
+
+    await Promise.all([
+      loadCloudProducts(true),
+      loadCloudPurchases(true),
+      loadCloudSupplierPayments(true)
+    ]);
+
+    toast('Purchase recorded in the cloud.');
   });
 }
 
