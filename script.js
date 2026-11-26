@@ -2653,17 +2653,48 @@ function render() {
       `).join('')
     : '<div class="empty">Complete sales to see best sellers.</div>';
 
-const selectedCustomerId = $('saleCustomer').value;
+const saleCustomerSelect = $('saleCustomer');
+const selectedCustomerId = saleCustomerSelect.value;
+const selectedCustomerOption =
+  saleCustomerSelect.selectedOptions[0];
 
-$('saleCustomer').innerHTML =
+if (
+  selectedCustomerId &&
+  selectedCustomerOption &&
+  !db.customers.some(c => String(c.id) === selectedCustomerId)
+) {
+  const label = selectedCustomerOption.textContent || '';
+  const separator = label.lastIndexOf(' — ');
+
+  db.customers.unshift({
+    id: selectedCustomerId,
+    name: separator >= 0
+      ? label.slice(0, separator)
+      : label,
+    phone: separator >= 0
+      ? label.slice(separator + 3)
+      : '',
+    email: '',
+    address: '',
+    notes: '',
+    localOnly: false
+  });
+}
+
+saleCustomerSelect.innerHTML =
   '<option value="">Walk-in customer</option>' +
   db.customers.map(c =>
     `<option value="${c.id}">${esc(c.name)} — ${esc(c.phone)}</option>`
   ).join('');
 
-if (db.customers.some(c => c.id === selectedCustomerId)) {
-  $('saleCustomer').value = selectedCustomerId;
+if (
+  selectedCustomerId &&
+  db.customers.some(c => String(c.id) === selectedCustomerId)
+) {
+  saleCustomerSelect.value = selectedCustomerId;
 }
+
+  
   renderSaleProducts();
   renderCart();
   renderCash();
