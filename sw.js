@@ -1,6 +1,7 @@
+
 'use strict';
 
-const CACHE_NAME = 'ambassadors-pos-v3';
+const CACHE_NAME = 'ambassadors-pos-v4';
 
 const APP_FILES = [
   './',
@@ -37,16 +38,17 @@ self.addEventListener('fetch', event => {
 
   const url = new URL(request.url);
 
-  // Never cache API requests or external websites.
   if (url.origin !== self.location.origin) return;
 
   if (request.mode === 'navigate') {
     event.respondWith(
       fetch(request)
         .then(response => {
-          const copy = response.clone();
-          caches.open(CACHE_NAME)
-            .then(cache => cache.put('./index.html', copy));
+          if (response.ok) {
+            const copy = response.clone();
+            caches.open(CACHE_NAME)
+              .then(cache => cache.put('./index.html', copy));
+          }
           return response;
         })
         .catch(() => caches.match('./index.html'))
@@ -54,18 +56,24 @@ self.addEventListener('fetch', event => {
     return;
   }
 
+  // Network first: fetch current files, use cache when offline.
   event.respondWith(
-    caches.match(request).then(cached => {
-      if (cached) return cached;
-
-      return fetch(request).then(response => {
+    fetch(request)
+      .then(response => {
         if (response.ok) {
           const copy = response.clone();
           caches.open(CACHE_NAME)
             .then(cache => cache.put(request, copy));
         }
         return response;
-      });
-    })
+      })
+      .catch(async () => {
+        const cached = await caches.match(request);
+        if (cached) return cached;
+        return new Response('Offline and no cached copy available.', {
+          status: 503,
+          headers: { 'Content-Type': 'text/plain' }
+        });
+      })
   );
 });
