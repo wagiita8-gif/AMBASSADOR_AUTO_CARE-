@@ -2016,14 +2016,19 @@ $('productSearch').oninput = e => {
 function renderCash() {
   const c = db.cash;
 
-  const cashSales = db.sales
-    .filter(s =>
-      new Date(s.date).toDateString() ===
-      (c.openedAt
-        ? new Date(c.openedAt).toDateString()
-        : new Date().toDateString())
-    )
-    .reduce((a,s) => a + (s.payment === 'Cash' ? s.paid : 0), 0);
+    const cashSales = db.sales
+    .filter(s => {
+      const saleDate = new Date(s.date);
+
+      return (
+        s.payment === 'Cash' &&
+        !Number.isNaN(saleDate.getTime()) &&
+        (c.openedAt
+          ? saleDate >= new Date(c.openedAt)
+          : saleDate.toDateString() === new Date().toDateString())
+      );
+    })
+    .reduce((a, s) => a + Number(s.paid || 0), 0);
 
   const cashExpenses = db.expenses
     .filter(e =>
