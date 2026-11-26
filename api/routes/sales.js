@@ -597,13 +597,12 @@ router.post("/sales", async (req, res) => {
       await client.query("ROLLBACK").catch(() => {});
     }
 
-    console.error("Cloud sale failed:", error.message);
-
-    res.status(
+        res.status(
       error.message.includes("not found") ||
       error.message.includes("Insufficient stock") ||
       error.message.includes("Discount") ||
-      error.message.includes("Payment")
+      error.message.includes("Payment") ||
+      error.message.includes("Credit sales")
         ? 400 : 500
     ).json({ error: error.message || "Could not record sale" });
 
