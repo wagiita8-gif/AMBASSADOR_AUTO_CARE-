@@ -122,8 +122,9 @@ router.get("/sales", async (req, res) => {
 
 router.post("/sales", async (req, res) => {
   const pool = req.app.locals.pool;
-  const {
+    const {
     receipt,
+    customerId = null,
     customerName,
     paymentMethod,
     discount = 0,
