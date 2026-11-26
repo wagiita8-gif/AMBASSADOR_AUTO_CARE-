@@ -279,6 +279,133 @@ async function loadCloudSales(silent = false) {
     return false;
   }
 }
+
+async function loadCloudPurchases(silent = false) {
+  const auth = getAuth();
+  if (!auth) return false;
+
+  try {
+    const response = await fetch(
+      `${API_BASE}/api/shops/${auth.shopId}/purchases`,
+      {
+        headers: {
+          Authorization: `Bearer ${auth.token}`,
+          Accept: 'application/json'
+        }
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || 'Could not load purchases.');
+    }
+
+    if (!Array.isArray(data.purchases)) {
+      throw new Error('Invalid purchases response.');
+    }
+
+    const localOnly = db.purchases
+      .filter(p =>
+        p.localOnly === true ||
+        String(p.id || '').startsWith('x')
+      )
+      .map(p => ({ ...p, localOnly: true }));
+
+    const cloudPurchases = data.purchases.map(p => ({
+      id: p.id,
+      supplierId: p.supplier_id,
+      supplierName: p.supplier_name || '',
+      invoice: p.invoice_number || '',
+      date: p.purchase_date,
+      items: (p.items || []).map(i => ({
+        productId: i.productId,
+        name: i.name,
+        qty: Number(i.quantity),
+        unitCost: Number(i.unitCost)
+      })),
+      total: Number(p.total),
+      paid: Number(p.paid),
+      balance: Number(p.balance),
+      method: p.payment_method,
+      localOnly: false
+    }));
+
+    db.purchases = [...cloudPurchases, ...localOnly];
+    save();
+
+    if (!silent) toast('Cloud purchases loaded.');
+
+    return true;
+  } catch (error) {
+    console.error('Cloud purchase loading failed:', error);
+
+    if (!silent) toast('Could not load cloud purchases.');
+
+    return false;
+  }
+}
+
+async function loadCloudSupplierPayments(silent = false) {
+  const auth = getAuth();
+  if (!auth) return false;
+
+  try {
+    const response = await fetch(
+      `${API_BASE}/api/shops/${auth.shopId}/supplier-payments`,
+      {
+        headers: {
+          Authorization: `Bearer ${auth.token}`,
+          Accept: 'application/json'
+        }
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || 'Could not load supplier payments.');
+    }
+
+    if (!Array.isArray(data.payments)) {
+      throw new Error('Invalid supplier payments response.');
+    }
+
+    const localOnly = db.supplierPayments
+      .filter(p =>
+        p.localOnly === true ||
+        String(p.id || '').startsWith('x')
+      )
+      .map(p => ({ ...p, localOnly: true }));
+
+    const cloudPayments = data.payments.map(p => ({
+      id: p.id,
+      supplierId: p.supplier_id,
+      supplierName: p.supplier_name || '',
+      amount: Number(p.amount),
+      method: p.method,
+      reference: p.reference || '',
+      notes: p.notes || '',
+      date: p.created_at,
+      allocations: p.allocations || [],
+      localOnly: false
+    }));
+
+    db.supplierPayments = [...cloudPayments, ...localOnly];
+    save();
+
+    if (!silent) toast('Cloud supplier payments loaded.');
+
+    return true;
+  } catch (error) {
+    console.error('Cloud supplier payment loading failed:', error);
+
+    if (!silent) toast('Could not load cloud supplier payments.');
+
+    return false;
+  }
+}
+
 async function loadCloudCustomerPayments(silent = false) {
   const auth = getAuth();
   if (!auth) return false;
@@ -346,7 +473,9 @@ function startCloudSync() {
 
     try {
             await Promise.all([
-                loadCloudProducts(true),
+        loadCloudPurchases(true),
+        loadCloudSupplierPayments(true),
+        loadCloudProducts(true),
         loadCloudSales(true),
         loadCloudCustomerPayments(true),
         loadCloudParties(true)
@@ -365,6 +494,8 @@ document.addEventListener('pos:authenticated', async () => {
   updateConnectionStatus();
 
     await Promise.all([
+    loadCloudPurchases(),
+    loadCloudSupplierPayments(),
     loadCloudProducts(),
     loadCloudSales(),
     loadCloudParties(),
