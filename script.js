@@ -2338,21 +2338,39 @@ if (localStorage.getItem('ambassadors_theme') === 'dark') {
 // CONNECTION STATUS
 // --------------------------------------------------
 
-function updateConnectionStatus() {
-  const indicator = $('connection');
 
+async function updateConnectionStatus() {
+  const indicator = $('connection');
   if (!indicator) return;
 
   if (!navigator.onLine) {
-    indicator.textContent = '● OFFLINE · CLOUD CHECKOUT UNAVAILABLE';
+    indicator.textContent = '● OFFLINE · CLOUD UNAVAILABLE';
     return;
   }
 
-  indicator.textContent = getAuth()
-    ? '● AUTHENTICATED · CLOUD CONNECTED'
-    : '● ONLINE · SIGN IN REQUIRED';
-}
+  if (!getAuth()) {
+    indicator.textContent = '● ONLINE · SIGN IN REQUIRED';
+    return;
+  }
 
+  indicator.textContent = '● CHECKING CLOUD...';
+
+  try {
+    const response = await fetch(
+      'https://ambassador-auto-care.onrender.com/api/health',
+      { cache: 'no-store' }
+    );
+
+    const data = await response.json();
+
+    indicator.textContent =
+      response.ok && data.status === 'healthy'
+        ? '● CLOUD CONNECTED'
+        : '● CLOUD UNAVAILABLE';
+  } catch {
+    indicator.textContent = '● CLOUD UNAVAILABLE';
+  }
+}
 window.addEventListener('online',updateConnectionStatus);
 window.addEventListener('offline',updateConnectionStatus);
 
