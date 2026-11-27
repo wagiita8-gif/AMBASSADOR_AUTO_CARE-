@@ -502,13 +502,9 @@ async function loadCloudSales(silent = false) {
       status: s.status,
       localOnly: false,
       items: (s.items || []).map(i => ({
-        id: i.id,
-        name: i.name,
-        sku: i.sku,
-        qty: Number(i.qty),
-        price: Number(i.price),
-        cost: Number(i.cost || 0)
-      }))
+  id: i.id,
+  saleItemId: i.saleItemId,
+  name: i.name,
     }));
 
     const updatedSales = [...cloudSales, ...localOnlySales];
