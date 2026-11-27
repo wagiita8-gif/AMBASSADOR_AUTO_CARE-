@@ -95,7 +95,19 @@ CREATE UNIQUE INDEX IF NOT EXISTS
       amount NUMERIC(12,2) NOT NULL CHECK (amount > 0),
       PRIMARY KEY (payment_id, sale_id)
     );
+CREATE TABLE IF NOT EXISTS sale_edit_audit (
+  id UUID PRIMARY KEY,
+  shop_id UUID NOT NULL REFERENCES shops(id),
+  sale_id UUID NOT NULL REFERENCES sales(id),
+  edited_by UUID NOT NULL REFERENCES users(id),
+  edited_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  reason TEXT,
+  before_data JSONB NOT NULL,
+  after_data JSONB NOT NULL
+);
 
+CREATE INDEX IF NOT EXISTS idx_sale_edit_audit_sale
+  ON sale_edit_audit(shop_id, sale_id, edited_at DESC);
     CREATE INDEX IF NOT EXISTS idx_sales_shop_date
       ON sales(shop_id, created_at DESC);
 
@@ -150,6 +162,458 @@ router.get("/sales", async (req, res) => {
 // CUSTOMER PAYMENT HISTORY
 // --------------------------------------------------
 
+router.patch("/sales/:saleId", async (req, res) => {
+  if (!["owner", "manager"].includes(req.shopRole)) {
+    return res.status(403).json({
+      error: "Only the owner or manager can edit sales."
+    });
+  }
+
+  const pool = req.app.locals.pool;
+  const { saleId } = req.params;
+
+  const {
+    receipt,
+    customerId = null,
+    paymentMethod,
+    discount = 0,
+    items,
+    reason = ""
+  } = req.body || {};
+
+  const uuidPattern =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+  if (
+    !uuidPattern.test(saleId) ||
+    typeof receipt !== "string" ||
+    !receipt.trim() ||
+    receipt.trim().length > 80 ||
+    typeof paymentMethod !== "string" ||
+    !paymentMethod.trim() ||
+    paymentMethod.trim().length > 40 ||
+    !Number.isFinite(Number(discount)) ||
+    Number(discount) < 0 ||
+    !Array.isArray(items) ||
+    items.length === 0 ||
+    items.length > 100 ||
+    (customerId !== null &&
+      (typeof customerId !== "string" || !uuidPattern.test(customerId))) ||
+    typeof reason !== "string" ||
+    reason.length > 500
+  ) {
+    return res.status(400).json({
+      error: "Invalid sale correction details."
+    });
+  }
+
+  const normalizedItems = [];
+
+  for (const item of items) {
+    const quantity = Number(item.qty);
+    const price = Number(item.price);
+
+    if (
+      typeof item.productId !== "string" ||
+      !uuidPattern.test(item.productId) ||
+      !Number.isFinite(quantity) ||
+      quantity <= 0 ||
+      !Number.isFinite(price) ||
+      price <= 0
+    ) {
+      return res.status(400).json({
+        error: "Every sale item needs a valid product, quantity and price."
+      });
+    }
+
+    normalizedItems.push({
+      productId: item.productId,
+      quantity,
+      price
+    });
+  }
+
+  let client;
+  let transactionStarted = false;
+
+  try {
+    client = await pool.connect();
+
+    await client.query("BEGIN");
+    transactionStarted = true;
+
+    // Lock the sale so two people cannot edit it simultaneously.
+    const saleResult = await client.query(
+      `SELECT *
+       FROM sales
+       WHERE id = $1 AND shop_id = $2
+       FOR UPDATE`,
+      [saleId, req.shopId]
+    );
+
+    if (!saleResult.rows.length) {
+      const error = new Error("Sale not found.");
+      error.status = 404;
+      throw error;
+    }
+
+    const oldSale = saleResult.rows[0];
+
+    // Preserve all existing customer-payment allocations.
+    const allocationResult = await client.query(
+      `SELECT COUNT(*)::int AS count,
+              COALESCE(SUM(amount), 0) AS allocated
+       FROM customer_payment_allocations
+       WHERE sale_id = $1`,
+      [saleId]
+    );
+
+    const allocationCount = Number(allocationResult.rows[0].count);
+    const allocatedAmount = Number(allocationResult.rows[0].allocated);
+
+    if (
+      allocationCount > 0 &&
+      customerId !== oldSale.customer_id
+    ) {
+      const error = new Error(
+        "This sale has customer payments allocated to it. Its customer cannot be changed."
+      );
+      error.status = 409;
+      throw error;
+    }
+
+    const paidCents = Math.round(Number(oldSale.paid) * 100);
+    const allocatedCents = Math.round(allocatedAmount * 100);
+
+    if (paidCents < allocatedCents) {
+      const error = new Error(
+        "The recorded paid amount is inconsistent with its payment allocations. Resolve this before editing."
+      );
+      error.status = 409;
+      throw error;
+    }
+
+    // Verify the replacement customer belongs to this shop.
+    let verifiedCustomer = null;
+
+    if (customerId) {
+      const customerResult = await client.query(
+        `SELECT id, name
+         FROM customers
+         WHERE id = $1 AND shop_id = $2
+         FOR UPDATE`,
+        [customerId, req.shopId]
+      );
+
+      if (!customerResult.rows.length) {
+        const error = new Error("Selected customer was not found.");
+        error.status = 404;
+        throw error;
+      }
+
+      verifiedCustomer = customerResult.rows[0];
+    }
+
+    // Load the original sale items.
+    const oldItemsResult = await client.query(
+      `SELECT product_id, product_name, sku,
+              quantity, unit_price, line_total
+       FROM sale_items
+       WHERE sale_id = $1`,
+      [saleId]
+    );
+
+    const oldItems = oldItemsResult.rows;
+
+    const oldQuantities = new Map();
+    const newQuantities = new Map();
+
+    for (const item of oldItems) {
+      const id = item.product_id;
+
+      oldQuantities.set(
+        id,
+        (oldQuantities.get(id) || 0) + Number(item.quantity)
+      );
+    }
+
+    for (const item of normalizedItems) {
+      const id = item.productId;
+
+      newQuantities.set(
+        id,
+        (newQuantities.get(id) || 0) + item.quantity
+      );
+    }
+
+    // Lock every affected product in a consistent order.
+    const productIds = [
+      ...new Set([
+        ...oldQuantities.keys(),
+        ...newQuantities.keys()
+      ])
+    ].sort();
+
+    const products = new Map();
+
+    for (const productId of productIds) {
+      const result = await client.query(
+        `SELECT id, name, sku, quantity
+         FROM products
+         WHERE id = $1 AND shop_id = $2
+         FOR UPDATE`,
+        [productId, req.shopId]
+      );
+
+      if (!result.rows.length) {
+        const error = new Error(
+          "A product in the original or corrected sale no longer exists."
+        );
+        error.status = 409;
+        throw error;
+      }
+
+      products.set(productId, result.rows[0]);
+    }
+
+    // Calculate the corrected sale total using integer cents.
+    let subtotalCents = 0;
+
+    for (const item of normalizedItems) {
+      subtotalCents += Math.round(
+        item.quantity * Math.round(item.price * 100)
+      );
+    }
+
+    subtotalCents = Math.round(subtotalCents);
+
+    const discountCents = Math.round(Number(discount) * 100);
+
+    if (discountCents > subtotalCents) {
+      const error = new Error("Discount cannot exceed subtotal.");
+      error.status = 400;
+      throw error;
+    }
+
+    const totalCents = subtotalCents - discountCents;
+
+    // Recorded payments are not rewritten by this editor.
+    if (totalCents < paidCents) {
+      const error = new Error(
+        "The corrected total cannot be lower than the amount already recorded as paid."
+      );
+      error.status = 409;
+      throw error;
+    }
+
+    const balanceCents = totalCents - paidCents;
+
+    if (balanceCents > 0 && !verifiedCustomer) {
+      const error = new Error(
+        "A sale with an outstanding balance must have a registered customer."
+      );
+      error.status = 400;
+      throw error;
+    }
+
+    // Restore removed quantities and deduct additional quantities.
+    for (const productId of productIds) {
+      const oldQty = oldQuantities.get(productId) || 0;
+      const newQty = newQuantities.get(productId) || 0;
+      const difference = Number((newQty - oldQty).toFixed(3));
+
+      if (difference === 0) continue;
+
+      if (difference > 0) {
+        const result = await client.query(
+          `UPDATE products
+           SET quantity = quantity - $1
+           WHERE id = $2
+             AND shop_id = $3
+             AND quantity >= $1
+           RETURNING id`,
+          [difference, productId, req.shopId]
+        );
+
+        if (result.rowCount !== 1) {
+          const product = products.get(productId);
+          const error = new Error(
+            `Insufficient stock for ${product.name}. The sale was not changed.`
+          );
+          error.status = 409;
+          throw error;
+        }
+      } else {
+        await client.query(
+          `UPDATE products
+           SET quantity = quantity + $1
+           WHERE id = $2 AND shop_id = $3`,
+          [Math.abs(difference), productId, req.shopId]
+        );
+      }
+    }
+
+    const subtotal = subtotalCents / 100;
+    const discountAmount = discountCents / 100;
+    const total = totalCents / 100;
+    const paid = paidCents / 100;
+    const balance = balanceCents / 100;
+
+    const status =
+      balanceCents === 0
+        ? "completed"
+        : paidCents === 0
+          ? "credit"
+          : "partial";
+
+    const customerName = verifiedCustomer
+      ? verifiedCustomer.name
+      : (
+          typeof oldSale.customer_name === "string" &&
+          oldSale.customer_name !== "Walk-in"
+            ? oldSale.customer_name
+            : "Walk-in"
+        );
+
+    // Capture the complete before-state.
+    const beforeData = {
+      sale: oldSale,
+      items: oldItems
+    };
+
+    // Update the sale itself.
+    await client.query(
+      `UPDATE sales
+       SET receipt = $1,
+           invoice_number = $1,
+           customer_id = $2,
+           customer_name = $3,
+           payment_method = $4,
+           subtotal = $5,
+           discount = $6,
+           total = $7,
+           balance = $8,
+           status = $9
+       WHERE id = $10 AND shop_id = $11`,
+      [
+        receipt.trim(),
+        verifiedCustomer ? verifiedCustomer.id : null,
+        verifiedCustomer ? verifiedCustomer.name : "Walk-in",
+        paymentMethod.trim(),
+        subtotal,
+        discountAmount,
+        total,
+        balance,
+        status,
+        saleId,
+        req.shopId
+      ]
+    );
+
+    // Replace the sale item rows.
+    await client.query(
+      "DELETE FROM sale_items WHERE sale_id = $1",
+      [saleId]
+    );
+
+    for (const item of normalizedItems) {
+      const product = products.get(item.productId);
+      const lineTotal = Number(
+        (item.quantity * item.price).toFixed(2)
+      );
+
+      await client.query(
+        `INSERT INTO sale_items (
+          id, sale_id, product_id, product_name,
+          sku, quantity, unit_price, line_total
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [
+          randomUUID(),
+          saleId,
+          item.productId,
+          product.name,
+          product.sku,
+          item.quantity,
+          item.price,
+          lineTotal
+        ]
+      );
+    }
+
+    const afterData = {
+      sale: {
+        receipt: receipt.trim(),
+        customerId: verifiedCustomer ? verifiedCustomer.id : null,
+        customerName,
+        paymentMethod: paymentMethod.trim(),
+        subtotal,
+        discount: discountAmount,
+        total,
+        paid,
+        balance,
+        status
+      },
+      items: normalizedItems.map(item => ({
+        productId: item.productId,
+        productName: products.get(item.productId).name,
+        sku: products.get(item.productId).sku,
+        quantity: item.quantity,
+        price: item.price
+      }))
+    };
+
+    // Permanent edit history.
+    await client.query(
+      `INSERT INTO sale_edit_audit (
+        id, shop_id, sale_id, edited_by,
+        reason, before_data, after_data
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [
+        randomUUID(),
+        req.shopId,
+        saleId,
+        req.user.userId,
+        reason.trim() || null,
+        beforeData,
+        afterData
+      ]
+    );
+
+    await client.query("COMMIT");
+    transactionStarted = false;
+
+    return res.status(200).json({
+      message: "Sale updated successfully.",
+      sale: {
+        id: saleId,
+        receipt: receipt.trim(),
+        subtotal,
+        discount: discountAmount,
+        total,
+        paid,
+        balance,
+        status
+      }
+    });
+
+  } catch (error) {
+    if (client && transactionStarted) {
+      await client.query("ROLLBACK").catch(() => {});
+    }
+
+    console.error("Sale edit failed:", error.message);
+
+    return res.status(error.status || 500).json({
+      error: error.message || "Could not update sale."
+    });
+
+  } finally {
+    if (client) client.release();
+  }
+});
+          
 router.get("/customer-payments", async (req, res) => {
   const pool = req.app.locals.pool;
 
