@@ -192,20 +192,20 @@ router.get("/customer-payments", async (req, res) => {
 // RECORD CUSTOMER PAYMENT
 // --------------------------------------------------
 
-router.post("/customer-payments", async (req, res) => {
-  const pool = req.app.locals.pool;
 
   const {
     customerId,
     amount,
     method,
     reference = "",
-    notes = ""
+    notes = "",
+    requestId
   } = req.body;
-
   const paymentAmount = Number(amount);
 
   if (
+        typeof requestId !== "string" ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestId) ||
     typeof customerId !== "string" ||
     !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(customerId) ||
     !Number.isFinite(paymentAmount) ||
@@ -237,7 +237,41 @@ router.post("/customer-payments", async (req, res) => {
        FOR UPDATE`,
       [customerId, req.shopId]
     );
+       const existingPaymentResult = await client.query(
+      `SELECT id, customer_id, amount, method
+       FROM customer_payments
+       WHERE shop_id = $1 AND request_id = $2`,
+      [req.shopId, requestId]
+    );
 
+    if (existingPaymentResult.rows.length) {
+      const existingPayment = existingPaymentResult.rows[0];
+
+      const allocationResult = await client.query(
+        `SELECT a.sale_id AS "saleId",
+                s.receipt,
+                a.amount
+         FROM customer_payment_allocations a
+         JOIN sales s ON s.id = a.sale_id
+         WHERE a.payment_id = $1`,
+        [existingPayment.id]
+      );
+
+      await client.query("COMMIT");
+      transactionStarted = false;
+
+      return res.status(200).json({
+        message: "Customer payment was already recorded",
+        alreadyProcessed: true,
+        payment: {
+          id: existingPayment.id,
+          customerId: existingPayment.customer_id,
+          amount: Number(existingPayment.amount),
+          method: existingPayment.method,
+          allocations: allocationResult.rows
+        }
+      });
+    }
     if (!customerResult.rows.length) {
       throw new Error("Customer not found.");
     }
