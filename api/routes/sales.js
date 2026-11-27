@@ -190,8 +190,7 @@ router.get("/customer-payments", async (req, res) => {
 
 // --------------------------------------------------
 // RECORD CUSTOMER PAYMENT
-// --------------------------------------------------
-
+// --------------------------------------------------       
 router.post("/customer-payments", async (req, res) => {
   const pool = req.app.locals.pool;
 
@@ -202,20 +201,28 @@ router.post("/customer-payments", async (req, res) => {
     reference = "",
     notes = "",
     requestId
-  } = req.body;
+  } = req.body || {};
 
   const paymentAmount = Number(amount);
+  const normalizedMethod =
+    typeof method === "string" ? method.trim() : "";
+  const normalizedReference =
+    typeof reference === "string" ? reference.trim() || null : null;
+  const normalizedNotes =
+    typeof notes === "string" ? notes.trim() || null : null;
+
+  const uuidPattern =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
   if (
     typeof requestId !== "string" ||
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestId) ||
+    !uuidPattern.test(requestId) ||
     typeof customerId !== "string" ||
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(customerId) ||
+    !uuidPattern.test(customerId) ||
     !Number.isFinite(paymentAmount) ||
     paymentAmount <= 0 ||
     Math.round(paymentAmount * 100) !== paymentAmount * 100 ||
-    typeof method !== "string" ||
-    !method.trim() ||
+    !normalizedMethod ||
     typeof reference !== "string" ||
     typeof notes !== "string"
   ) {
@@ -223,6 +230,9 @@ router.post("/customer-payments", async (req, res) => {
       error: "Invalid customer payment details"
     });
   }
+
+  const paymentCents = Math.round(paymentAmount * 100);
+
   let client;
   let transactionStarted = false;
 
@@ -232,44 +242,56 @@ router.post("/customer-payments", async (req, res) => {
     await client.query("BEGIN");
     transactionStarted = true;
 
-    const customerResult = await client.query(
-      `SELECT id, name
-       FROM customers
-       WHERE id = $1 AND shop_id = $2
-       FOR UPDATE`,
-      [customerId, req.shopId]
+    // Serialize requests using the same request ID.
+    await client.query(
+      `SELECT pg_advisory_xact_lock(
+        hashtextextended($1, 0)
+      )`,
+      [`${req.shopId}:${requestId}`]
     );
-        if (!customerResult.rows.length) {
-      throw new Error("Customer not found.");
-        }
-       const existingPaymentResult = await client.query(
-       `SELECT id, customer_id, amount, method
-        FROM customer_payments
-        WHERE shop_id = $1 AND request_id = $2`,
+
+    // Check whether this exact request was already processed.
+    const existingPaymentResult = await client.query(
+      `SELECT
+         id,
+         customer_id,
+         amount,
+         method,
+         reference,
+         notes
+       FROM customer_payments
+       WHERE shop_id = $1
+         AND request_id = $2`,
       [req.shopId, requestId]
     );
 
-      
-        if (existingPaymentResult.rows.length) {
-      const existingPayment = existingPaymentResult.rows[0];
+    if (existingPaymentResult.rows.length) {
+      const existing = existingPaymentResult.rows[0];
 
-      if (
-        existingPayment.customer_id !== customerId ||
-        Math.round(Number(existingPayment.amount) * 100) !==
-          Math.round(paymentAmount * 100)
-      ) {
-        throw new Error(
-          "Request ID was already used for a different payment."
+      const matches =
+        existing.customer_id === customerId &&
+        Math.round(Number(existing.amount) * 100) === paymentCents &&
+        existing.method === normalizedMethod &&
+        (existing.reference || null) === normalizedReference &&
+        (existing.notes || null) === normalizedNotes;
+
+      if (!matches) {
+        const error = new Error(
+          "This request ID was already used for different payment details."
         );
+        error.status = 409;
+        throw error;
       }
+
       const allocationResult = await client.query(
-        `SELECT a.sale_id AS "saleId",
-                s.receipt,
-                a.amount
+        `SELECT
+           a.sale_id AS "saleId",
+           s.receipt,
+           a.amount
          FROM customer_payment_allocations a
          JOIN sales s ON s.id = a.sale_id
          WHERE a.payment_id = $1`,
-        [existingPayment.id]
+        [existing.id]
       );
 
       await client.query("COMMIT");
@@ -279,16 +301,32 @@ router.post("/customer-payments", async (req, res) => {
         message: "Customer payment was already recorded",
         alreadyProcessed: true,
         payment: {
-          id: existingPayment.id,
-          customerId: existingPayment.customer_id,
-          amount: Number(existingPayment.amount),
-          method: existingPayment.method,
+          id: existing.id,
+          customerId: existing.customer_id,
+          amount: Number(existing.amount),
+          method: existing.method,
           allocations: allocationResult.rows
         }
       });
     }
-  
 
+    // Lock the customer while processing a new payment.
+    const customerResult = await client.query(
+      `SELECT id
+       FROM customers
+       WHERE id = $1
+         AND shop_id = $2
+       FOR UPDATE`,
+      [customerId, req.shopId]
+    );
+
+    if (!customerResult.rows.length) {
+      const error = new Error("Customer not found.");
+      error.status = 404;
+      throw error;
+    }
+
+    // Get outstanding invoices, oldest first.
     const invoiceResult = await client.query(
       `SELECT id, receipt, total, paid, balance
        FROM sales
@@ -308,24 +346,35 @@ router.post("/customer-payments", async (req, res) => {
       0
     );
 
-    const paymentCents = Math.round(paymentAmount * 100);
-
     if (paymentCents > outstandingCents) {
-      throw new Error(
-        `Payment exceeds outstanding balance of ${(outstandingCents / 100).toFixed(2)}.`
+      const error = new Error(
+        `Payment exceeds outstanding balance of ${
+          (outstandingCents / 100).toFixed(2)
+        }.`
       );
+      error.status = 400;
+      throw error;
     }
 
-    if (paymentCents === 0) {
-      throw new Error("Payment amount must be greater than zero.");
+    if (paymentCents <= 0) {
+      const error = new Error("Payment amount must be greater than zero.");
+      error.status = 400;
+      throw error;
     }
 
     const paymentId = randomUUID();
 
     await client.query(
-            `INSERT INTO customer_payments (
-        id, shop_id, customer_id, user_id,
-        amount, method, reference, notes, request_id
+      `INSERT INTO customer_payments (
+        id,
+        shop_id,
+        customer_id,
+        user_id,
+        amount,
+        method,
+        reference,
+        notes,
+        request_id
       )
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
       [
@@ -334,9 +383,9 @@ router.post("/customer-payments", async (req, res) => {
         customerId,
         req.user.userId,
         paymentCents / 100,
-        method.trim(),
-        reference.trim() || null,
-        notes.trim() || null,
+        normalizedMethod,
+        normalizedReference,
+        normalizedNotes,
         requestId
       ]
     );
@@ -344,6 +393,7 @@ router.post("/customer-payments", async (req, res) => {
     let remainingCents = paymentCents;
     const allocations = [];
 
+    // Allocate payment to oldest outstanding invoices first.
     for (const invoice of invoices) {
       if (remainingCents <= 0) break;
 
@@ -368,7 +418,9 @@ router.post("/customer-payments", async (req, res) => {
 
       await client.query(
         `INSERT INTO customer_payment_allocations (
-          payment_id, sale_id, amount
+          payment_id,
+          sale_id,
+          amount
         )
         VALUES ($1,$2,$3)`,
         [
@@ -378,14 +430,15 @@ router.post("/customer-payments", async (req, res) => {
         ]
       );
 
-      await client.query(
+      const updateResult = await client.query(
         `UPDATE sales
          SET paid = $1,
              balance = $2,
              status = $3
          WHERE id = $4
            AND shop_id = $5
-           AND customer_id = $6`,
+           AND customer_id = $6
+           AND balance > 0`,
         [
           newPaidCents / 100,
           newBalanceCents / 100,
@@ -396,6 +449,12 @@ router.post("/customer-payments", async (req, res) => {
         ]
       );
 
+      if (updateResult.rowCount !== 1) {
+        throw new Error(
+          "Invoice update failed. Payment was rolled back."
+        );
+      }
+
       allocations.push({
         receipt: invoice.receipt,
         amount: allocatedCents / 100,
@@ -405,16 +464,22 @@ router.post("/customer-payments", async (req, res) => {
       remainingCents -= allocatedCents;
     }
 
+    if (remainingCents !== 0) {
+      throw new Error(
+        "Payment allocation was incomplete. Payment was rolled back."
+      );
+    }
+
     await client.query("COMMIT");
     transactionStarted = false;
 
-    res.status(201).json({
+    return res.status(201).json({
       message: "Customer payment recorded successfully",
       payment: {
         id: paymentId,
         customerId,
         amount: paymentCents / 100,
-        method: method.trim(),
+        method: normalizedMethod,
         allocations
       }
     });
@@ -424,14 +489,12 @@ router.post("/customer-payments", async (req, res) => {
       await client.query("ROLLBACK").catch(() => {});
     }
 
-    console.error("Customer payment failed:", error.message);
+    console.error(
+      "Customer payment failed:",
+      error.message
+    );
 
-    res.status(
-      error.message.includes("not found") ||
-      error.message.includes("exceeds outstanding") ||
-      error.message.includes("greater than zero")
-        ? 400 : 500
-    ).json({
+    return res.status(error.status || 500).json({
       error: error.message || "Could not record customer payment"
     });
 
@@ -439,6 +502,7 @@ router.post("/customer-payments", async (req, res) => {
     if (client) client.release();
   }
 });
+   
 router.post("/sales", async (req, res) => {
   const pool = req.app.locals.pool;
   const {
