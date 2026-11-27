@@ -2209,7 +2209,318 @@ selectedSaleCustomer = null;
   }
 }
 
-function viewReceipt(id) {
+function
+async function editSale(id) {
+  const auth = getAuth();
+
+  if (!auth || !["owner", "manager"].includes(
+    String(auth.role || "").toLowerCase()
+  )) {
+    return toast("Only the owner or manager can edit sales.");
+  }
+
+  if (!navigator.onLine) {
+    return toast("Connect to the internet before editing a sale.");
+  }
+
+  const sale = db.sales.find(
+    item => item.id === id && item.localOnly !== true
+  );
+
+  if (!sale) {
+    return toast("Cloud sale not found.");
+  }
+
+  if (!Array.isArray(sale.items) || !sale.items.length) {
+    return toast("This sale has no editable item details.");
+  }
+
+  const cancel = value => value === null;
+
+  // Customer selection.
+  const customerOptions = [
+    "0. Walk-in customer",
+    ...db.customers.map(
+      (customer, index) => `${index + 1}. ${customer.name}`
+    )
+  ].join("\n");
+
+  const currentCustomerIndex = sale.customerId
+    ? db.customers.findIndex(c => c.id === sale.customerId) + 1
+    : 0;
+
+  const customerInput = prompt(
+    `Choose the customer number:\n${customerOptions}`,
+    String(Math.max(0, currentCustomerIndex))
+  );
+
+  if (cancel(customerInput)) return;
+
+  const customerIndex = Number(customerInput);
+
+  if (
+    !Number.isInteger(customerIndex) ||
+    customerIndex < 0 ||
+    customerIndex > db.customers.length
+  ) {
+    return toast("Invalid customer selection.");
+  }
+
+  const customerId = customerIndex === 0
+    ? null
+    : db.customers[customerIndex - 1].id;
+
+  // Receipt number.
+  const receipt = prompt(
+    "Receipt / invoice number:",
+    sale.receipt
+  );
+
+  if (cancel(receipt)) return;
+
+  if (!receipt.trim()) {
+    return toast("Receipt number cannot be empty.");
+  }
+
+  // Payment method.
+  const paymentMethods = [
+    "Cash",
+    "M-Pesa",
+    "Card",
+    "Bank",
+    "Other"
+  ];
+
+  const methodInput = prompt(
+    `Payment method:\n${paymentMethods.map(
+      (method, index) => `${index + 1}. ${method}`
+    ).join("\n")}`,
+    String(
+      Math.max(1, paymentMethods.indexOf(sale.payment) + 1)
+    )
+  );
+
+  if (cancel(methodInput)) return;
+
+  const methodIndex = Number(methodInput);
+
+  if (
+    !Number.isInteger(methodIndex) ||
+    methodIndex < 1 ||
+    methodIndex > paymentMethods.length
+  ) {
+    return toast("Invalid payment method.");
+  }
+
+  const paymentMethod = paymentMethods[methodIndex - 1];
+
+  // Correct existing item quantities and prices.
+  const correctedItems = [];
+
+  for (const item of sale.items) {
+    const product = db.products.find(p => p.id === item.id);
+
+    if (!product) {
+      return toast(
+        `Product ${item.name} is not available in cloud inventory.`
+      );
+    }
+
+    const quantityInput = prompt(
+      `Quantity for ${item.name} (enter 0 to remove):`,
+      String(item.qty)
+    );
+
+    if (cancel(quantityInput)) return;
+
+    const quantity = Number(quantityInput);
+
+    if (!Number.isFinite(quantity) || quantity < 0) {
+      return toast("Invalid item quantity.");
+    }
+
+    if (quantity === 0) continue;
+
+    const priceInput = prompt(
+      `Selling price for ${item.name}:`,
+      String(item.price)
+    );
+
+    if (cancel(priceInput)) return;
+
+    const price = Number(priceInput);
+
+    if (!Number.isFinite(price) || price <= 0) {
+      return toast("Invalid selling price.");
+    }
+
+    correctedItems.push({
+      productId: item.id,
+      qty: quantity,
+      price
+    });
+  }
+
+  if (!correctedItems.length) {
+    return toast("A sale must contain at least one product.");
+  }
+
+  // Optionally add products to the corrected sale.
+  while (true) {
+    const availableProducts = db.products
+      .map((product, index) =>
+        `${index + 1}. ${product.name} (${product.sku}) — ${money(product.price)}`
+      )
+      .join("\n");
+
+    const addInput = prompt(
+      `Add another product?\n\n${availableProducts}\n\nEnter product number, or leave blank to continue.`
+    );
+
+    if (cancel(addInput)) return;
+    if (!addInput.trim()) break;
+
+    const productIndex = Number(addInput);
+
+    if (
+      !Number.isInteger(productIndex) ||
+      productIndex < 1 ||
+      productIndex > db.products.length
+    ) {
+      toast("Invalid product number.");
+      continue;
+    }
+
+    const product = db.products[productIndex - 1];
+
+    const quantityInput = prompt(
+      `Quantity for ${product.name}:`,
+      "1"
+    );
+
+    if (cancel(quantityInput)) return;
+
+    const quantity = Number(quantityInput);
+
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      toast("Invalid quantity.");
+      continue;
+    }
+
+    const priceInput = prompt(
+      `Selling price for ${product.name}:`,
+      String(product.price)
+    );
+
+    if (cancel(priceInput)) return;
+
+    const price = Number(priceInput);
+
+    if (!Number.isFinite(price) || price <= 0) {
+      toast("Invalid price.");
+      continue;
+    }
+
+    correctedItems.push({
+      productId: product.id,
+      qty: quantity,
+      price
+    });
+  }
+
+  const discountInput = prompt(
+    "Discount amount (KSh):",
+    String(sale.discount || 0)
+  );
+
+  if (cancel(discountInput)) return;
+
+  const discount = Number(discountInput);
+
+  if (!Number.isFinite(discount) || discount < 0) {
+    return toast("Invalid discount.");
+  }
+
+  const reason = prompt(
+    "Reason for this correction (optional):",
+    ""
+  );
+
+  if (cancel(reason)) return;
+
+  const previewSubtotal = correctedItems.reduce(
+    (sum, item) => sum + item.qty * item.price,
+    0
+  );
+
+  const previewTotal = previewSubtotal - discount;
+
+  if (discount > previewSubtotal) {
+    return toast("Discount cannot exceed the subtotal.");
+  }
+
+  if (previewTotal < Number(sale.paid)) {
+    return toast(
+      "The corrected total cannot be lower than the amount already recorded as paid."
+    );
+  }
+
+  const summary = [
+    `Receipt: ${receipt.trim()}`,
+    `Customer: ${customerIndex === 0 ? "Walk-in" : db.customers[customerIndex - 1].name}`,
+    `Subtotal: ${money(previewSubtotal)}`,
+    `Discount: ${money(discount)}`,
+    `New total: ${money(previewTotal)}`,
+    `Recorded paid amount (preserved): ${money(sale.paid)}`,
+    `New balance: ${money(previewTotal - Number(sale.paid))}`,
+    "",
+    "Save these corrections?"
+  ].join("\n");
+
+  if (!confirm(summary)) return;
+
+  try {
+    const response = await fetch(
+      `${API_BASE}/api/shops/${auth.shopId}/sales/${encodeURIComponent(id)}`,
+      {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${auth.token}`,
+          "Content-Type": "application/json",
+          Accept: "application/json"
+        },
+        body: JSON.stringify({
+          receipt: receipt.trim(),
+          customerId,
+          paymentMethod,
+          discount,
+          items: correctedItems,
+          reason
+        })
+      }
+    );
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(data.error || "Sale correction failed.");
+    }
+
+    await Promise.all([
+      loadCloudSales(true),
+      loadCloudProducts(true),
+      loadCloudCustomerPayments(true)
+    ]);
+
+    render();
+    toast("Sale corrected and stock updated.");
+
+  } catch (error) {
+    console.error("Sale edit failed:", error);
+    toast(error.message || "Could not edit sale.");
+  }
+}
+ viewReceipt(id) {
   const s = db.sales.find(x => x.id === id);
 
   if (!s) {
