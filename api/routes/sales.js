@@ -249,7 +249,11 @@ router.post("/customer-payments", async (req, res) => {
       [req.shopId, requestId]
     );
 
-        if (
+      
+        if (existingPaymentResult.rows.length) {
+      const existingPayment = existingPaymentResult.rows[0];
+
+      if (
         existingPayment.customer_id !== customerId ||
         Math.round(Number(existingPayment.amount) * 100) !==
           Math.round(paymentAmount * 100)
@@ -257,8 +261,7 @@ router.post("/customer-payments", async (req, res) => {
         throw new Error(
           "Request ID was already used for a different payment."
         );
-        }
-  const requestId = crypto.randomUUID();
+      }
       const allocationResult = await client.query(
         `SELECT a.sale_id AS "saleId",
                 s.receipt,
