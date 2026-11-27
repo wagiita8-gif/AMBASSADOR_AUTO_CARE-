@@ -1,7 +1,7 @@
 
 'use strict';
 
-const CACHE_NAME = 'ambassadors-pos-v5';
+const CACHE_NAME = 'ambassadors-pos-v6';
 
 const APP_FILES = [
   './',
