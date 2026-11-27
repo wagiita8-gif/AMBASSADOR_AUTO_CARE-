@@ -2327,28 +2327,23 @@ async function editSale(id) {
 
   const paymentMethod = paymentMethods[methodIndex - 1];
 
-  // Correct existing item quantities and prices.
-  const correctedItems = [];
+
+  
 
 
-for (const item of sale.items) {
+  // Replace the existing sale product with one selected from inventory.
   if (!db.products.length) {
     return toast("No cloud products are available.");
   }
 
   const productOptions = db.products
     .map((product, index) =>
-      `${index + 1}. ${product.name} (${product.sku || "No SKU"})`
+      `${index + 1}. ${product.name} (${product.sku || "No SKU"}) — ${money(product.price)}`
     )
     .join("\n");
 
-  const currentIndex = db.products.findIndex(
-    product => product.id === item.id
-  );
-
   const productInput = prompt(
-    `Choose the product for this sale item:\n\n${productOptions}`,
-    String(currentIndex >= 0 ? currentIndex + 1 : "")
+    `SELECT REPLACEMENT PRODUCT:\n\n${productOptions}\n\nEnter product number:`
   );
 
   if (cancel(productInput)) return;
@@ -2366,28 +2361,21 @@ for (const item of sale.items) {
   const selectedProduct = db.products[productIndex - 1];
 
   const quantityInput = prompt(
-    `Quantity for ${selectedProduct.name} (enter 0 to remove):`,
-    String(item.qty)
+    `Quantity for ${selectedProduct.name}:`,
+    String(sale.items.reduce((sum, item) => sum + Number(item.qty || 0), 0))
   );
 
   if (cancel(quantityInput)) return;
 
   const quantity = Number(quantityInput);
 
-  if (!Number.isFinite(quantity) || quantity < 0) {
-    return toast("Invalid item quantity.");
+  if (!Number.isFinite(quantity) || quantity <= 0) {
+    return toast("Invalid quantity.");
   }
-
-  if (quantity === 0) continue;
-
-  const defaultPrice =
-    selectedProduct.id === item.id
-      ? item.price
-      : selectedProduct.price;
 
   const priceInput = prompt(
     `Selling price for ${selectedProduct.name}:`,
-    String(defaultPrice)
+    String(selectedProduct.price)
   );
 
   if (cancel(priceInput)) return;
@@ -2398,79 +2386,11 @@ for (const item of sale.items) {
     return toast("Invalid selling price.");
   }
 
-  correctedItems.push({
+  const correctedItems = [{
     productId: selectedProduct.id,
     qty: quantity,
     price
-  });
-}
-  if (!correctedItems.length) {
-    return toast("A sale must contain at least one product.");
-  }
-
-  // Optionally add products to the corrected sale.
-  while (true) {
-    const availableProducts = db.products
-      .map((product, index) =>
-        `${index + 1}. ${product.name} (${product.sku}) — ${money(product.price)}`
-      )
-      .join("\n");
-
-    const addInput = prompt(
-      `Add another product?\n\n${availableProducts}\n\nEnter product number, or leave blank to continue.`
-    );
-
-    if (cancel(addInput)) return;
-    if (!addInput.trim()) break;
-
-    const productIndex = Number(addInput);
-
-    if (
-      !Number.isInteger(productIndex) ||
-      productIndex < 1 ||
-      productIndex > db.products.length
-    ) {
-      toast("Invalid product number.");
-      continue;
-    }
-
-    const product = db.products[productIndex - 1];
-
-    const quantityInput = prompt(
-      `Quantity for ${product.name}:`,
-      "1"
-    );
-
-    if (cancel(quantityInput)) return;
-
-    const quantity = Number(quantityInput);
-
-    if (!Number.isFinite(quantity) || quantity <= 0) {
-      toast("Invalid quantity.");
-      continue;
-    }
-
-    const priceInput = prompt(
-      `Selling price for ${product.name}:`,
-      String(product.price)
-    );
-
-    if (cancel(priceInput)) return;
-
-    const price = Number(priceInput);
-
-    if (!Number.isFinite(price) || price <= 0) {
-      toast("Invalid price.");
-      continue;
-    }
-
-    correctedItems.push({
-      productId: product.id,
-      qty: quantity,
-      price
-    });
-  }
-
+  }];
   const discountInput = prompt(
     "Discount amount (KSh):",
     String(sale.discount || 0)
