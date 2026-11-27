@@ -1,4 +1,3 @@
-
 'use strict';
 
 const express = require('express');
@@ -6,86 +5,31 @@ const { randomUUID } = require('crypto');
 
 const router = express.Router();
 
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+// --------------------------------------------------
+// DATABASE INITIALIZATION
+// Uses the EXISTING Neon schema.
+// --------------------------------------------------
+
 async function initializePurchaseTables(pool) {
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS purchases (
-      id UUID PRIMARY KEY,
-      shop_id UUID NOT NULL REFERENCES shops(id),
-      supplier_id UUID NOT NULL REFERENCES suppliers(id),
-      user_id UUID NOT NULL REFERENCES users(id),
-      request_id UUID NOT NULL,
-      invoice_number TEXT NOT NULL,
-      purchase_date DATE NOT NULL DEFAULT CURRENT_DATE,
-      total NUMERIC(12,2) NOT NULL CHECK (total > 0),
-      paid NUMERIC(12,2) NOT NULL DEFAULT 0,
-      balance NUMERIC(12,2) NOT NULL,
-      payment_method TEXT,
-      notes TEXT,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      UNIQUE(shop_id, request_id)
-    );
-       ALTER TABLE purchases
-      ADD COLUMN IF NOT EXISTS purchase_date DATE;
-
-    DO $$
-    BEGIN
-      IF EXISTS (
-        SELECT 1
-        FROM information_schema.columns
-        WHERE table_schema = current_schema()
-          AND table_name = 'purchases'
-          AND column_name = 'date'
-      ) THEN
-        EXECUTE '
-          UPDATE purchases
-          SET purchase_date = "date"::date
-          WHERE purchase_date IS NULL
-        ';
-      END IF;
-    END $$;
-
-    UPDATE purchases
-    SET purchase_date = CURRENT_DATE
-    WHERE purchase_date IS NULL;
-
     ALTER TABLE purchases
-      ALTER COLUMN purchase_date SET DEFAULT CURRENT_DATE;
+      ADD COLUMN IF NOT EXISTS request_id UUID;
 
-    ALTER TABLE purchases
-      ALTER COLUMN purchase_date SET NOT NULL;
-    CREATE TABLE IF NOT EXISTS purchase_items (
-      id UUID PRIMARY KEY,
-      purchase_id UUID NOT NULL
-        REFERENCES purchases(id) ON DELETE CASCADE,
-      product_id UUID NOT NULL REFERENCES products(id),
-      product_name TEXT NOT NULL,
-      quantity NUMERIC(12,3) NOT NULL CHECK (quantity > 0),
-      unit_cost NUMERIC(12,2) NOT NULL CHECK (unit_cost >= 0),
-      total NUMERIC(12,2) NOT NULL
-    );
+    CREATE UNIQUE INDEX IF NOT EXISTS
+      idx_purchases_shop_request
+      ON purchases(shop_id, request_id)
+      WHERE request_id IS NOT NULL;
 
-    CREATE TABLE IF NOT EXISTS supplier_payments (
-      id UUID PRIMARY KEY,
-      shop_id UUID NOT NULL REFERENCES shops(id),
-      supplier_id UUID NOT NULL REFERENCES suppliers(id),
-      user_id UUID NOT NULL REFERENCES users(id),
-      request_id UUID NOT NULL,
-      amount NUMERIC(12,2) NOT NULL CHECK (amount > 0),
-      method TEXT NOT NULL,
-      reference TEXT,
-      notes TEXT,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      UNIQUE(shop_id, request_id)
-    );
+    ALTER TABLE supplier_payments
+      ADD COLUMN IF NOT EXISTS request_id UUID;
 
-    CREATE TABLE IF NOT EXISTS supplier_payment_allocations (
-      payment_id UUID NOT NULL
-        REFERENCES supplier_payments(id) ON DELETE CASCADE,
-      purchase_id UUID NOT NULL
-        REFERENCES purchases(id),
-      amount NUMERIC(12,2) NOT NULL CHECK (amount > 0),
-      PRIMARY KEY(payment_id, purchase_id)
-    );
+    CREATE UNIQUE INDEX IF NOT EXISTS
+      idx_supplier_payments_shop_request
+      ON supplier_payments(shop_id, request_id)
+      WHERE request_id IS NOT NULL;
 
     CREATE INDEX IF NOT EXISTS idx_purchases_shop_date
       ON purchases(shop_id, purchase_date DESC);
@@ -109,7 +53,19 @@ router.get('/purchases', async (req, res) => {
   try {
     const result = await req.app.locals.pool.query(
       `SELECT
-         p.*,
+         p.id,
+         p.shop_id,
+         p.supplier_id,
+         p.invoice_number,
+         p.subtotal,
+         p.total,
+         p.amount_paid AS paid,
+         p.balance,
+         p.status,
+         p.notes,
+         p.created_by,
+         p.created_at,
+         p.purchase_date,
          s.name AS supplier_name,
          COALESCE(
            json_agg(
@@ -118,7 +74,7 @@ router.get('/purchases', async (req, res) => {
                'name', pi.product_name,
                'quantity', pi.quantity,
                'unitCost', pi.unit_cost,
-               'total', pi.total
+               'total', pi.line_total
              )
            ) FILTER (WHERE pi.id IS NOT NULL),
            '[]'
@@ -136,9 +92,13 @@ router.get('/purchases', async (req, res) => {
     );
 
     res.json({ purchases: result.rows });
+
   } catch (error) {
     console.error('Purchase history error:', error.message);
-    res.status(500).json({ error: 'Could not load purchases' });
+
+    res.status(500).json({
+      error: 'Could not load purchases'
+    });
   }
 });
 
@@ -150,7 +110,7 @@ router.post('/purchases', async (req, res) => {
   const {
     requestId,
     supplierId,
-    invoiceNumber,
+    invoiceNumber = '',
     productId,
     quantity,
     unitCost,
@@ -163,19 +123,17 @@ router.post('/purchases', async (req, res) => {
   const qty = Number(quantity);
   const cost = Number(unitCost);
   const paidAmount = Number(paid);
+
   const totalCents = Math.round(qty * cost * 100);
   const paidCents = Math.round(paidAmount * 100);
 
-  const uuidPattern =
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
   if (
     typeof requestId !== 'string' ||
-    !uuidPattern.test(requestId) ||
+    !UUID_PATTERN.test(requestId) ||
     typeof supplierId !== 'string' ||
-    !uuidPattern.test(supplierId) ||
+    !UUID_PATTERN.test(supplierId) ||
     typeof productId !== 'string' ||
-    !uuidPattern.test(productId) ||
+    !UUID_PATTERN.test(productId) ||
     !Number.isFinite(qty) ||
     qty <= 0 ||
     !Number.isFinite(cost) ||
@@ -187,10 +145,10 @@ router.post('/purchases', async (req, res) => {
     Math.round(paidAmount * 100) !== paidAmount * 100 ||
     totalCents <= 0 ||
     paidCents > totalCents ||
-    typeof notes !== 'string' ||
     typeof invoiceNumber !== 'string' ||
     typeof paymentMethod !== 'string' ||
     !paymentMethod.trim() ||
+    typeof notes !== 'string' ||
     !/^\d{4}-\d{2}-\d{2}$/.test(purchaseDate || '')
   ) {
     return res.status(400).json({
@@ -203,18 +161,29 @@ router.post('/purchases', async (req, res) => {
 
   try {
     client = await req.app.locals.pool.connect();
+
     await client.query('BEGIN');
     transactionStarted = true;
+
+    // Prevent concurrent duplicate submissions.
+    await client.query(
+      `SELECT pg_advisory_xact_lock(
+         hashtext($1),
+         hashtext($2)
+       )`,
+      [req.shopId, requestId]
+    );
 
     const existing = await client.query(
       `SELECT id
        FROM purchases
-       WHERE shop_id = $1 AND request_id = $2`,
+       WHERE shop_id = $1
+         AND request_id = $2`,
       [req.shopId, requestId]
     );
 
     if (existing.rows.length) {
-      await client.query('ROLLBACK');
+      await client.query('COMMIT');
       transactionStarted = false;
 
       return res.status(200).json({
@@ -225,63 +194,92 @@ router.post('/purchases', async (req, res) => {
     }
 
     const supplier = await client.query(
-      `SELECT id FROM suppliers
-       WHERE id = $1 AND shop_id = $2
+      `SELECT id, name
+       FROM suppliers
+       WHERE id = $1
+         AND shop_id = $2
        FOR UPDATE`,
       [supplierId, req.shopId]
     );
 
     if (!supplier.rows.length) {
-      throw new Error('Supplier not found');
+      const error = new Error('Supplier not found');
+      error.status = 404;
+      throw error;
     }
 
     const product = await client.query(
       `SELECT id, name
        FROM products
-       WHERE id = $1 AND shop_id = $2
+       WHERE id = $1
+         AND shop_id = $2
        FOR UPDATE`,
       [productId, req.shopId]
     );
 
     if (!product.rows.length) {
-      throw new Error('Product not found');
+      const error = new Error('Product not found');
+      error.status = 404;
+      throw error;
     }
 
     const purchaseId = randomUUID();
     const balanceCents = totalCents - paidCents;
+
     const invoice = invoiceNumber.trim() ||
       `PUR-${purchaseId.slice(0, 8).toUpperCase()}`;
 
+    // Actual schema:
+    // subtotal, total, amount_paid, balance,
+    // notes, created_by, purchase_date.
     const purchaseResult = await client.query(
       `INSERT INTO purchases (
-        id, shop_id, supplier_id, user_id,
-        request_id, invoice_number, purchase_date,
-        total, paid, balance, payment_method, notes
-      )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-      RETURNING *`,
+         id,
+         shop_id,
+         supplier_id,
+         invoice_number,
+         subtotal,
+         total,
+         amount_paid,
+         balance,
+         notes,
+         created_by,
+         purchase_date,
+         request_id
+       )
+       VALUES (
+         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12
+       )
+       RETURNING *`,
       [
         purchaseId,
         req.shopId,
         supplierId,
-        req.user.userId,
-        requestId,
         invoice,
-        purchaseDate,
+        totalCents / 100,
         totalCents / 100,
         paidCents / 100,
         balanceCents / 100,
-        paymentMethod.trim(),
-        notes.trim() || null
+        notes.trim() || null,
+        req.user.userId,
+        purchaseDate,
+        requestId
       ]
     );
 
+    // Actual purchase_items column is line_total,
+    // NOT total.
     await client.query(
       `INSERT INTO purchase_items (
-        id, purchase_id, product_id,
-        product_name, quantity, unit_cost, total
-      )
-      VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+         id,
+         purchase_id,
+         product_id,
+         product_name,
+         quantity,
+         unit_cost,
+         line_total
+       )
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
       [
         randomUUID(),
         purchaseId,
@@ -293,63 +291,82 @@ router.post('/purchases', async (req, res) => {
       ]
     );
 
+    // Increase stock in the same transaction.
     await client.query(
       `UPDATE products
-       SET quantity = quantity + $1
-       WHERE id = $2 AND shop_id = $3`,
+       SET quantity = quantity + $1,
+           updated_at = NOW()
+       WHERE id = $2
+         AND shop_id = $3`,
       [qty, productId, req.shopId]
     );
 
+    // Record the stock movement.
     await client.query(
       `INSERT INTO stock_movements (
-        shop_id, product_id, user_id,
-        movement_type, quantity, unit_cost,
-        supplier_name, notes
-      )
-      VALUES (
-        $1, $2, $3, 'purchase', $4, $5,
-        (SELECT name FROM suppliers WHERE id = $6),
-        $7
-      )`,
+         shop_id,
+         product_id,
+         user_id,
+         movement_type,
+         quantity,
+         unit_cost,
+         supplier_name,
+         notes
+       )
+       VALUES (
+         $1,$2,$3,'purchase',$4,$5,$6,$7
+       )`,
       [
         req.shopId,
         productId,
         req.user.userId,
         qty,
         cost,
-        supplierId,
+        supplier.rows[0].name,
         notes.trim() || invoice
       ]
     );
 
+    // Record the initial supplier payment, if any.
     if (paidCents > 0) {
       const paymentId = randomUUID();
 
       await client.query(
         `INSERT INTO supplier_payments (
-          id, shop_id, supplier_id, user_id,
-          request_id, amount, method, reference, notes
-        )
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+           id,
+           shop_id,
+           supplier_id,
+           amount,
+           payment_method,
+           reference,
+           paid_by,
+           request_id
+         )
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
         [
           paymentId,
           req.shopId,
           supplierId,
-          req.user.userId,
-          requestId,
           paidCents / 100,
-          paymentMethod.trim(),
+          paymentMethod.trim().toLowerCase(),
           invoice,
-          notes.trim() || null
+          req.user.userId,
+          randomUUID()
         ]
       );
 
       await client.query(
         `INSERT INTO supplier_payment_allocations (
-          payment_id, purchase_id, amount
-        )
-        VALUES ($1,$2,$3)`,
-        [paymentId, purchaseId, paidCents / 100]
+           payment_id,
+           purchase_id,
+           amount
+         )
+         VALUES ($1,$2,$3)`,
+        [
+          paymentId,
+          purchaseId,
+          paidCents / 100
+        ]
       );
     }
 
@@ -358,7 +375,10 @@ router.post('/purchases', async (req, res) => {
 
     res.status(201).json({
       message: 'Purchase recorded successfully',
-      purchase: purchaseResult.rows[0]
+      purchase: {
+        ...purchaseResult.rows[0],
+        paid: purchaseResult.rows[0].amount_paid
+      }
     });
 
   } catch (error) {
@@ -366,11 +386,12 @@ router.post('/purchases', async (req, res) => {
       await client.query('ROLLBACK').catch(() => {});
     }
 
-    console.error('Purchase recording failed:', error.message);
+    console.error(
+      'Purchase recording failed:',
+      error.message
+    );
 
-    res.status(
-      error.message.includes('not found') ? 404 : 500
-    ).json({
+    res.status(error.status || 500).json({
       error: error.message || 'Could not record purchase'
     });
 
@@ -387,7 +408,14 @@ router.get('/supplier-payments', async (req, res) => {
   try {
     const result = await req.app.locals.pool.query(
       `SELECT
-         sp.*,
+         sp.id,
+         sp.shop_id,
+         sp.supplier_id,
+         sp.amount,
+         sp.payment_method AS method,
+         sp.reference,
+         sp.paid_by,
+         sp.created_at,
          s.name AS supplier_name,
          COALESCE(
            json_agg(
@@ -411,8 +439,13 @@ router.get('/supplier-payments', async (req, res) => {
     );
 
     res.json({ payments: result.rows });
+
   } catch (error) {
-    console.error('Supplier payment history error:', error.message);
+    console.error(
+      'Supplier payment history error:',
+      error.message
+    );
+
     res.status(500).json({
       error: 'Could not load supplier payments'
     });
@@ -429,27 +462,22 @@ router.post('/supplier-payments', async (req, res) => {
     supplierId,
     amount,
     method,
-    reference = '',
-    notes = ''
+    reference = ''
   } = req.body;
 
   const paymentCents = Math.round(Number(amount) * 100);
 
-  const uuidPattern =
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
   if (
     typeof requestId !== 'string' ||
-    !uuidPattern.test(requestId) ||
+    !UUID_PATTERN.test(requestId) ||
     typeof supplierId !== 'string' ||
-    !uuidPattern.test(supplierId) ||
+    !UUID_PATTERN.test(supplierId) ||
     !Number.isSafeInteger(paymentCents) ||
     paymentCents <= 0 ||
     Number(amount) * 100 !== paymentCents ||
     typeof method !== 'string' ||
     !method.trim() ||
-    typeof reference !== 'string' ||
-    typeof notes !== 'string'
+    typeof reference !== 'string'
   ) {
     return res.status(400).json({
       error: 'Invalid supplier payment details'
@@ -461,35 +489,67 @@ router.post('/supplier-payments', async (req, res) => {
 
   try {
     client = await req.app.locals.pool.connect();
+
     await client.query('BEGIN');
     transactionStarted = true;
 
+    await client.query(
+      `SELECT pg_advisory_xact_lock(
+         hashtext($1),
+         hashtext($2)
+       )`,
+      [req.shopId, requestId]
+    );
+
     const duplicate = await client.query(
-      `SELECT id FROM supplier_payments
-       WHERE shop_id = $1 AND request_id = $2`,
+      `SELECT id, supplier_id, amount,
+              payment_method, reference
+       FROM supplier_payments
+       WHERE shop_id = $1
+         AND request_id = $2`,
       [req.shopId, requestId]
     );
 
     if (duplicate.rows.length) {
-      await client.query('ROLLBACK');
+      const old = duplicate.rows[0];
+
+      const matches =
+        old.supplier_id === supplierId &&
+        Math.round(Number(old.amount) * 100) === paymentCents &&
+        old.payment_method === method.trim().toLowerCase() &&
+        (old.reference || '') === reference.trim();
+
+      if (!matches) {
+        const error = new Error(
+          'This payment request ID was already used for different details.'
+        );
+        error.status = 409;
+        throw error;
+      }
+
+      await client.query('COMMIT');
       transactionStarted = false;
 
       return res.status(200).json({
         message: 'Payment was already recorded',
-        paymentId: duplicate.rows[0].id,
+        paymentId: old.id,
         duplicate: true
       });
     }
 
     const supplier = await client.query(
-      `SELECT id FROM suppliers
-       WHERE id = $1 AND shop_id = $2
+      `SELECT id
+       FROM suppliers
+       WHERE id = $1
+         AND shop_id = $2
        FOR UPDATE`,
       [supplierId, req.shopId]
     );
 
     if (!supplier.rows.length) {
-      throw new Error('Supplier not found');
+      const error = new Error('Supplier not found');
+      error.status = 404;
+      throw error;
     }
 
     const invoices = await client.query(
@@ -510,27 +570,36 @@ router.post('/supplier-payments', async (req, res) => {
     );
 
     if (paymentCents > outstandingCents) {
-      throw new Error('Payment exceeds supplier outstanding balance');
+      const error = new Error(
+        'Payment exceeds supplier outstanding balance'
+      );
+      error.status = 400;
+      throw error;
     }
 
     const paymentId = randomUUID();
 
     await client.query(
       `INSERT INTO supplier_payments (
-        id, shop_id, supplier_id, user_id,
-        request_id, amount, method, reference, notes
-      )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+         id,
+         shop_id,
+         supplier_id,
+         amount,
+         payment_method,
+         reference,
+         paid_by,
+         request_id
+       )
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
       [
         paymentId,
         req.shopId,
         supplierId,
-        req.user.userId,
-        requestId,
         paymentCents / 100,
-        method.trim(),
+        method.trim().toLowerCase(),
         reference.trim() || null,
-        notes.trim() || null
+        req.user.userId,
+        requestId
       ]
     );
 
@@ -539,23 +608,33 @@ router.post('/supplier-payments', async (req, res) => {
     for (const invoice of invoices.rows) {
       if (remaining <= 0) break;
 
-      const balance = Math.round(Number(invoice.balance) * 100);
+      const balance = Math.round(
+        Number(invoice.balance) * 100
+      );
+
       const allocated = Math.min(remaining, balance);
       const newBalance = balance - allocated;
 
       await client.query(
         `INSERT INTO supplier_payment_allocations (
-          payment_id, purchase_id, amount
-        )
-        VALUES ($1,$2,$3)`,
-        [paymentId, invoice.id, allocated / 100]
+           payment_id,
+           purchase_id,
+           amount
+         )
+         VALUES ($1,$2,$3)`,
+        [
+          paymentId,
+          invoice.id,
+          allocated / 100
+        ]
       );
 
       await client.query(
         `UPDATE purchases
-         SET paid = paid + $1,
+         SET amount_paid = amount_paid + $1,
              balance = $2
-         WHERE id = $3 AND shop_id = $4`,
+         WHERE id = $3
+           AND shop_id = $4`,
         [
           allocated / 100,
           newBalance / 100,
@@ -565,6 +644,12 @@ router.post('/supplier-payments', async (req, res) => {
       );
 
       remaining -= allocated;
+    }
+
+    if (remaining !== 0) {
+      throw new Error(
+        'Payment allocation was incomplete. Payment rolled back.'
+      );
     }
 
     await client.query('COMMIT');
@@ -580,13 +665,12 @@ router.post('/supplier-payments', async (req, res) => {
       await client.query('ROLLBACK').catch(() => {});
     }
 
-    console.error('Supplier payment failed:', error.message);
+    console.error(
+      'Supplier payment failed:',
+      error.message
+    );
 
-    res.status(
-      error.message.includes('not found') ||
-      error.message.includes('exceeds supplier')
-        ? 400 : 500
-    ).json({
+    res.status(error.status || 500).json({
       error: error.message || 'Could not record supplier payment'
     });
 
