@@ -598,7 +598,8 @@ router.get("/sales", async (req, res) => {
            json_agg(
              json_build_object(
                'id', si.product_id,
-               'name', si.product_name,
+'saleItemId', si.id,
+'name', si.product_name,
                'sku', si.sku,
                'qty', si.quantity,
                'price', si.unit_price,
