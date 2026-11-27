@@ -1519,8 +1519,9 @@ async function payCustomer(id) {
           'Content-Type': 'application/json',
           Accept: 'application/json'
         },
-        body: JSON.stringify({
+          body: JSON.stringify({
           customerId: id,
+          requestId,
           amount,
           method: d.method,
           reference: d.reference,
