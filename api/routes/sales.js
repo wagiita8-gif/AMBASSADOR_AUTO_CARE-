@@ -416,7 +416,9 @@ router.patch("/sales/:saleId", async (req, res) => {
       throw error;
     }
 
+
     // Restore removed quantities and deduct additional quantities.
+    // Every stock change is recorded in stock_movements.
     for (const productId of productIds) {
       const oldQty = oldQuantities.get(productId) || 0;
       const newQty = newQuantities.get(productId) || 0;
@@ -424,7 +426,32 @@ router.patch("/sales/:saleId", async (req, res) => {
 
       if (difference === 0) continue;
 
+      const oldProductItems = oldItems.filter(
+        item => item.product_id === productId
+      );
+
+      const newProductItems = normalizedItems.filter(
+        item => item.productId === productId
+      );
+
+      const oldValue = oldProductItems.reduce(
+        (sum, item) =>
+          sum + Number(item.quantity) * Number(item.unit_price),
+        0
+      );
+
+      const newValue = newProductItems.reduce(
+        (sum, item) => sum + item.quantity * item.price,
+        0
+      );
+
+      const movementQuantity = Math.abs(difference);
+
+      let movementType;
+      let movementPrice;
+
       if (difference > 0) {
+        // More units are now included in the sale.
         const result = await client.query(
           `UPDATE products
            SET quantity = quantity - $1
@@ -432,7 +459,7 @@ router.patch("/sales/:saleId", async (req, res) => {
              AND shop_id = $3
              AND quantity >= $1
            RETURNING id`,
-          [difference, productId, req.shopId]
+          [movementQuantity, productId, req.shopId]
         );
 
         if (result.rowCount !== 1) {
@@ -443,16 +470,45 @@ router.patch("/sales/:saleId", async (req, res) => {
           error.status = 409;
           throw error;
         }
+
+        movementType = "sale";
+        movementPrice = newQty > 0 ? newValue / newQty : 0;
+
       } else {
+        // Units removed from the sale are returned to stock.
         await client.query(
           `UPDATE products
            SET quantity = quantity + $1
            WHERE id = $2 AND shop_id = $3`,
-          [Math.abs(difference), productId, req.shopId]
+          [movementQuantity, productId, req.shopId]
         );
-      }
-    }
 
+        movementType = "sale_return";
+        movementPrice = oldQty > 0 ? oldValue / oldQty : 0;
+      }
+
+      await client.query(
+        `INSERT INTO stock_movements (
+          shop_id,
+          product_id,
+          user_id,
+          movement_type,
+          quantity,
+          unit_price,
+          notes
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [
+          req.shopId,
+          productId,
+          req.user.userId,
+          movementType,
+          movementQuantity,
+          Number(movementPrice.toFixed(2)),
+          `Sale edit: ${oldSale.receipt} → ${receipt.trim()}`
+        ]
+      );
+    }
     const subtotal = subtotalCents / 100;
     const discountAmount = discountCents / 100;
     const total = totalCents / 100;
@@ -598,12 +654,18 @@ router.patch("/sales/:saleId", async (req, res) => {
       }
     });
 
-  } catch (error) {
+    } catch (error) {
     if (client && transactionStarted) {
       await client.query("ROLLBACK").catch(() => {});
     }
 
-    console.error("Sale edit failed:", error.message);
+    console.error("Sale edit failed:", error.message, error.code);
+
+    if (error.code === "23505") {
+      return res.status(409).json({
+        error: "That receipt or invoice number is already in use."
+      });
+    }
 
     return res.status(error.status || 500).json({
       error: error.message || "Could not update sale."
@@ -612,6 +674,7 @@ router.patch("/sales/:saleId", async (req, res) => {
   } finally {
     if (client) client.release();
   }
+
 });
           
 router.get("/customer-payments", async (req, res) => {
