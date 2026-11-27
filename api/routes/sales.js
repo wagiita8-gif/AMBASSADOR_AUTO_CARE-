@@ -368,7 +368,7 @@ const cost = Number(item.cost ?? 0);
         `SELECT id, name, sku, quantity, selling_price
          FROM products
          WHERE id = $1 AND shop_id = $2
-         FOR UPDATE`
+         FOR UPDATE`,
         [productId, req.shopId]
       );
 
