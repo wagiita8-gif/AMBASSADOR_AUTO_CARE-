@@ -505,7 +505,11 @@ async function loadCloudSales(silent = false) {
   id: i.id,
   saleItemId: i.saleItemId,
   name: i.name,
-    }));
+  sku: i.sku,
+  qty: Number(i.qty),
+  price: Number(i.price),
+  cost: Number(i.cost || 0)
+}))
 
     const updatedSales = [...cloudSales, ...localOnlySales];
 
@@ -2268,7 +2272,7 @@ async function returnSale(id) {
   }
 
   const itemOptions = sale.items.map(item => ({
-    value: item.id,
+    value: item.saleItemId,
     label: `${item.name} — sold: ${item.qty}`
   }));
 
@@ -2323,7 +2327,7 @@ async function returnSale(id) {
     }
   ], async d => {
     const selectedItem = sale.items.find(
-      item => String(item.id) === String(d.saleItemId)
+      item => String(item.saleItemId) === String(d.saleItemId)
     );
 
     if (!selectedItem) {
