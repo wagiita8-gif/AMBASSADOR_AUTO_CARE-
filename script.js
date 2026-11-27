@@ -2223,6 +2223,9 @@ async function editSale(id) {
     return toast("Connect to the internet before editing a sale.");
   }
 
+  
+
+  
   const sale = db.sales.find(
     item => item.id === id && item.localOnly !== true
   );
@@ -2231,6 +2234,16 @@ async function editSale(id) {
     return toast("Cloud sale not found.");
   }
 
+  // Always fetch the latest inventory before editing sale items.
+  const productsLoaded = await loadCloudProducts(true);
+
+  if (!productsLoaded) {
+    return toast("Could not load inventory. Sale was not changed.");
+  }
+
+  if (!db.products.length) {
+    return toast("No cloud products found. Sale was not changed.");
+  }
   if (!Array.isArray(sale.items) || !sale.items.length) {
     return toast("This sale has no editable item details.");
   }
