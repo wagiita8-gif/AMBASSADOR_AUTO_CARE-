@@ -2998,7 +2998,7 @@ function render() {
     x => x.status !== 'voided'
   ).length;
 
-const canEditSales = ["owner", "manager"].includes(
+  const canEditSales = ["owner", "manager"].includes(
   String(getAuth()?.role || "").toLowerCase()
 );
 
@@ -3013,6 +3013,17 @@ $('salesRows').innerHTML = db.sales
       </td>
       <td>${new Date(s.date).toLocaleString()}</td>
       <td>${esc(s.customerName)}</td>
+      <td>
+        ${
+          Array.isArray(s.items) && s.items.length
+            ? s.items.map(i =>
+                `<div>
+                  ${esc(i.name)} × ${Number(i.qty || 0)}
+                </div>`
+              ).join('')
+            : '<span class="sub">Product details unavailable</span>'
+        }
+      </td>
       <td>${esc(s.payment)}</td>
       <td>
         <span class="pill ${s.balance > 0 ? 'low' : ''}">
@@ -3032,7 +3043,7 @@ $('salesRows').innerHTML = db.sales
         }
       </td>
     </tr>
-  `).join('') || emptyRow(7, 'No sales yet.');
+  `).join('') || emptyRow(8, 'No sales yet.');
     $('recentSales').innerHTML = db.sales.length
     ? db.sales
         .slice()
