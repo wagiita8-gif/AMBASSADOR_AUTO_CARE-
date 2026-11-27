@@ -2397,32 +2397,31 @@ async function adjustStock(id) {
 // --------------------------------------------------
 // MAIN RENDER
 // --------------------------------------------------
-
 function renderSaleCustomerOptions() {
   const select = $('saleCustomer');
   if (!select) return;
 
-  const selectedId = select.value;
-  const selectedOption = select.selectedOptions[0];
+  const selectedId =
+    selectedSaleCustomerId || select.value || '';
 
-  // Keep a selected customer even if a refresh temporarily omits it.
+  if (selectedId) {
+    const customer = db.customers.find(
+      c => String(c.id) === String(selectedId)
+    );
+
+    if (customer) {
+      selectedSaleCustomer = customer;
+      selectedSaleCustomerId = String(customer.id);
+    }
+  }
+
   if (
-    selectedId &&
-    selectedOption &&
-    !db.customers.some(c => String(c.id) === selectedId)
+    selectedSaleCustomer &&
+    !db.customers.some(
+      c => String(c.id) === String(selectedSaleCustomer.id)
+    )
   ) {
-    const label = selectedOption.textContent || '';
-    const separator = label.lastIndexOf(' — ');
-
-    db.customers.unshift({
-      id: selectedId,
-      name: separator >= 0 ? label.slice(0, separator) : label,
-      phone: separator >= 0 ? label.slice(separator + 3) : '',
-      email: '',
-      address: '',
-      notes: '',
-      localOnly: false
-    });
+    db.customers.push(selectedSaleCustomer);
   }
 
   select.innerHTML =
@@ -2431,9 +2430,19 @@ function renderSaleCustomerOptions() {
       `<option value="${c.id}">${esc(c.name)} — ${esc(c.phone)}</option>`
     ).join('');
 
-  if (selectedId) select.value = selectedId;
+  select.value = selectedSaleCustomerId || '';
 }
 
+// Track deliberate customer selection.
+$('saleCustomer').addEventListener('change', () => {
+  selectedSaleCustomerId = $('saleCustomer').value || '';
+
+  selectedSaleCustomer = selectedSaleCustomerId
+    ? db.customers.find(
+        c => String(c.id) === String(selectedSaleCustomerId)
+      ) || null
+    : null;
+});
 function render() {
   const today = new Date().toDateString();
 
