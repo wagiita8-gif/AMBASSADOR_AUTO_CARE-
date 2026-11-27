@@ -192,6 +192,8 @@ router.get("/customer-payments", async (req, res) => {
 // RECORD CUSTOMER PAYMENT
 // --------------------------------------------------
 
+router.post("/customer-payments", async (req, res) => {
+  const pool = req.app.locals.pool;
 
   const {
     customerId,
@@ -200,13 +202,12 @@ router.get("/customer-payments", async (req, res) => {
     reference = "",
     notes = "",
     requestId
-    router.post("/customer-payments", async (req, res) => {
-  const pool = req.app.locals.pool;
   } = req.body;
+
   const paymentAmount = Number(amount);
 
   if (
-        typeof requestId !== "string" ||
+    typeof requestId !== "string" ||
     !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestId) ||
     typeof customerId !== "string" ||
     !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(customerId) ||
@@ -222,7 +223,6 @@ router.get("/customer-payments", async (req, res) => {
       error: "Invalid customer payment details"
     });
   }
-
   let client;
   let transactionStarted = false;
 
