@@ -1278,14 +1278,17 @@ const localSuppliers = db.suppliers.filter(
       notes: c.notes || '',
       localOnly: false
     }));
-if (
+    if (
   selectedCustomer &&
-  !cloudCustomers.some(c => c.id === selectedCustomerId)
+  !cloudCustomers.some(
+    c => String(c.id) === String(selectedCustomerId)
+  )
 ) {
   cloudCustomers.push(selectedCustomer);
-}
-    const cloudSuppliers = (supplierData.suppliers || []).map(s => ({
+    }
+  const cloudSuppliers = (supplierData.suppliers || []).map(s => ({
       id: s.id,
+      
       name: s.name,
       phone: s.phone || '',
       email: s.email || '',
