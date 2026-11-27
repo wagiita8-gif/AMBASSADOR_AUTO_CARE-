@@ -3044,22 +3044,34 @@ $('salesRows').innerHTML = db.sales
       </td>
     </tr>
   `).join('') || emptyRow(8, 'No sales yet.');
-    $('recentSales').innerHTML = db.sales.length
-    ? db.sales
-        .slice()
-        .sort((a, b) => new Date(b.date) - new Date(a.date))
-        .slice(0, 4)
-        .map(s => `
-          <div class="productpick">
-            <div>
-              <b>${esc(s.receipt)}</b>
-              <small>${esc(s.customerName)} · ${new Date(s.date).toLocaleString()}</small>
-            </div>
-            <b>${money(s.total)}</b>
+    
+$('recentSales').innerHTML = db.sales.length
+  ? db.sales
+      .slice()
+      .sort((a, b) => new Date(b.date) - new Date(a.date))
+      .slice(0, 4)
+      .map(s => `
+        <div class="productpick">
+          <div>
+            <b>${esc(s.receipt)}</b>
+            <small>
+              ${esc(s.customerName)} ·
+              ${new Date(s.date).toLocaleString()}
+            </small>
+            <small>
+              ${
+                Array.isArray(s.items) && s.items.length
+                  ? s.items.map(i =>
+                      `${esc(i.name)} × ${Number(i.qty || 0)}`
+                    ).join(', ')
+                  : 'Product details unavailable'
+              }
+            </small>
           </div>
-        `).join('')
-    : '<div class="empty">No transactions yet.</div>';
-
+          <b>${money(s.total)}</b>
+        </div>
+      `).join('')
+  : '<div class="empty">No transactions yet.</div>';
   const low = db.products.filter(p => p.stock <= p.reorder);
 
   $('lowList').innerHTML = low.length
