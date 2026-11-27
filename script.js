@@ -1446,60 +1446,87 @@ function customerForm() {
 }
 
 // CUSTOMER BALANCE
+
+    
 function customerBalance(id) {
   return db.sales
-    .filter(s => s.customerId === id)
-    .reduce((a, s) => a + Number(s.balance || 0), 0);
+    .filter(s => s.customerId === id && !s.localOnly)
+    .reduce(
+      (total, sale) => total + Number(sale.balance || 0),
+      0
+    );
 }
+
 async function payCustomer(id) {
-  const customer = db.customers.find(c => c.id === id);
-  const due = customerBalance(id);
   const auth = getAuth();
 
-  if (!customer) {
-    return toast('Customer not found.');
-  }
-
   if (!auth) {
-    return toast('Please log in first.');
+    return toast("Please log in first.");
   }
 
   if (!navigator.onLine) {
-    return toast('Internet connection required to record customer payments.');
+    return toast(
+      "Internet connection required to record customer payments."
+    );
   }
 
-  if (due <= 0) {
-    return toast('No outstanding customer balance.');
+  if (
+    typeof crypto === "undefined" ||
+    typeof crypto.randomUUID !== "function"
+  ) {
+    return toast(
+      "This browser cannot create a secure payment ID."
+    );
   }
-  if (!crypto.randomUUID) {
-    return toast('This browser cannot create a secure payment ID.');
+
+  // Refresh shared balances before opening the payment form.
+  const salesLoaded = await loadCloudSales(true);
+
+  if (!salesLoaded) {
+    return toast(
+      "Could not refresh customer balances. Try again."
+    );
+  }
+
+  const customer = db.customers.find(c => c.id === id);
+
+  if (!customer) {
+    return toast("Customer not found.");
+  }
+
+  const due = customerBalance(id);
+
+  if (due <= 0) {
+    return toast("No outstanding customer balance.");
   }
 
   const requestId = crypto.randomUUID();
-  openModal('Receive payment — ' + customer.name, [
+
+  openModal("Receive payment — " + customer.name, [
     {
-      name: 'amount',
-      label: 'Payment amount (KSh)',
-      type: 'number',
+      name: "amount",
+      label: "Payment amount (KSh)",
+      type: "number",
       min: 0.01,
       max: due,
-      step: '0.01',
+      step: "0.01",
       required: true
     },
     {
-      name: 'method',
-      label: 'Payment method',
-      type: 'select',
-      options: ['Cash', 'M-Pesa', 'Bank', 'Card', 'Other']
+      name: "method",
+      label: "Payment method",
+      type: "select",
+      options: ["Cash", "M-Pesa", "Bank", "Card", "Other"],
+      value: "Cash"
     },
     {
-      name: 'reference',
-      label: 'Reference'
+      name: "reference",
+      label: "Reference"
     },
     {
-      name: 'notes',
-      label: 'Notes',
-      type: 'textarea'
+      name: "notes",
+      label: "Notes",
+      type: "textarea"
     }
   ], async d => {
     const amount = Number(d.amount);
@@ -1510,46 +1537,66 @@ async function payCustomer(id) {
       amount > due ||
       Math.round(amount * 100) !== amount * 100
     ) {
-      toast('Enter a valid amount not exceeding the outstanding balance.');
+      toast(
+        "Enter a valid amount not exceeding the outstanding balance."
+      );
       return false;
     }
 
+    const payload = {
+      customerId: id,
+      requestId,
+      amount,
+      method: d.method,
+      reference: d.reference || "",
+      notes: d.notes || ""
+    };
+
+    // The same requestId remains in this modal if the request
+    // fails and the user retries without closing the modal.
     const response = await fetch(
       `${API_BASE}/api/shops/${auth.shopId}/customer-payments`,
       {
-        method: 'POST',
+        method: "POST",
         headers: {
           Authorization: `Bearer ${auth.token}`,
-          'Content-Type': 'application/json',
-          Accept: 'application/json'
+          "Content-Type": "application/json",
+          Accept: "application/json"
         },
-          body: JSON.stringify({
-          customerId: id,
-          requestId,
-          amount,
-          method: d.method,
-          reference: d.reference,
-          notes: d.notes
-        })
+        body: JSON.stringify(payload)
       }
     );
 
     const data = await response.json().catch(() => ({}));
 
     if (!response.ok) {
-      throw new Error(data.error || 'Customer payment failed.');
+      throw new Error(
+        data.error || "Customer payment failed."
+      );
     }
 
-    await Promise.all([
-      loadCloudSales(),
-      loadCloudCustomerPayments()
-    ]);
+    const [salesRefreshed, paymentsRefreshed] =
+      await Promise.all([
+        loadCloudSales(true),
+        loadCloudCustomerPayments(true)
+      ]);
 
     render();
-    toast('Customer payment recorded successfully.');
+
+    if (!salesRefreshed || !paymentsRefreshed) {
+      toast(
+        "Payment recorded, but some information could not refresh."
+      );
+    } else {
+      toast(
+        data.alreadyProcessed
+          ? "Payment was already recorded. No duplicate was created."
+          : "Customer payment recorded successfully."
+      );
+    }
   });
 }
-    
+
 
 // --------------------------------------------------
 // SUPPLIER PAYMENTS
