@@ -239,6 +239,9 @@ router.post("/customer-payments", async (req, res) => {
        FOR UPDATE`,
       [customerId, req.shopId]
     );
+        if (!customerResult.rows.length) {
+      throw new Error("Customer not found.");
+        }
        const existingPaymentResult = await client.query(
       `SELECT id, customer_id, amount, method
        FROM customer_payments
@@ -274,9 +277,7 @@ router.post("/customer-payments", async (req, res) => {
         }
       });
     }
-    if (!customerResult.rows.length) {
-      throw new Error("Customer not found.");
-    }
+  
 
     const invoiceResult = await client.query(
       `SELECT id, receipt, total, paid, balance
