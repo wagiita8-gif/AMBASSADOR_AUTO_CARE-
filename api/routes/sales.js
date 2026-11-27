@@ -1156,7 +1156,7 @@ router.post("/sales", async (req, res) => {
 
     for (const [productId, quantity] of [...quantities.entries()].sort()) {
       const result = await client.query(
-        `SELECT id, name, sku, selling_price, quantity
+       `SELECT id, name, sku, selling_price, cost, quantity
          FROM products
          WHERE id = $1 AND shop_id = $2
          FOR UPDATE`,
@@ -1178,11 +1178,12 @@ router.post("/sales", async (req, res) => {
       const price = Number(product.selling_price);
       subtotal += price * quantity;
 
-      saleItems.push({
+       saleItems.push({
         productId,
         product,
         quantity,
-        price
+        price,
+        cost: Number(product.cost || 0)
       });
     }
 
@@ -1266,13 +1267,12 @@ router.post("/sales", async (req, res) => {
           `Receipt ${receipt.trim()}`
         ]
       );
-
-          await client.query(
+       await client.query(
         `INSERT INTO sale_items (
           id, sale_id, product_id, product_name,
-          sku, quantity, unit_price, line_total
+          sku, quantity, unit_price, unit_cost, line_total
         )
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
         [
           randomUUID(),
           saleId,
@@ -1281,9 +1281,11 @@ router.post("/sales", async (req, res) => {
           item.product.sku,
           item.quantity,
           item.price,
+          item.cost,
           Number((item.quantity * item.price).toFixed(2))
         ]
       );
+        
     }
 
     await client.query("COMMIT");
