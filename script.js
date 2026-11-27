@@ -1252,12 +1252,16 @@ async function loadCloudParties(silent = false) {
     ]);
 
 
-    const selectedCustomerId = $('saleCustomer')?.value || '';
+    
+const selectedCustomerId =
+  selectedSaleCustomerId || $('saleCustomer')?.value || '';
 
-const selectedCustomer = db.customers.find(
-  c => c.id === selectedCustomerId
-);
-
+const selectedCustomer =
+  selectedSaleCustomer ||
+  db.customers.find(
+    c => String(c.id) === String(selectedCustomerId)
+  ) ||
+  null;
 const localCustomers = db.customers.filter(
   c => c.localOnly === true || String(c.id).startsWith('x')
 );
