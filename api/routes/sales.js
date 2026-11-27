@@ -513,6 +513,80 @@ router.post("/sales/:saleId/returns", async (req, res) => {
     client.release();
   }
 });
+// --------------------------------------------------
+// SALE RETURN HISTORY
+// --------------------------------------------------
+
+router.get("/sales/:saleId/returns", async (req, res) => {
+  const pool = req.app.locals.pool;
+  const { saleId } = req.params;
+
+  const uuidPattern =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+  if (!uuidPattern.test(saleId)) {
+    return res.status(400).json({
+      error: "Invalid sale ID."
+    });
+  }
+
+  try {
+    const sale = await pool.query(
+      `SELECT id, receipt
+       FROM sales
+       WHERE id = $1 AND shop_id = $2`,
+      [saleId, req.shopId]
+    );
+
+    if (!sale.rows.length) {
+      return res.status(404).json({
+        error: "Sale not found."
+      });
+    }
+
+    const result = await pool.query(
+      `SELECT
+         r.id,
+         r.receipt,
+         r.reason,
+         r.refund_method,
+         r.refund_amount,
+         r.credit_reduction,
+         r.created_at,
+         json_agg(
+           json_build_object(
+             'productName', ri.product_name,
+             'sku', ri.sku,
+             'quantity', ri.quantity,
+             'condition', ri.item_condition,
+             'unitRefund', ri.unit_refund,
+             'lineTotal', ri.line_total
+           )
+           ORDER BY ri.product_name
+         ) AS items
+       FROM sale_returns r
+       LEFT JOIN sale_return_items ri
+         ON ri.return_id = r.id
+       WHERE r.shop_id = $1
+         AND r.sale_id = $2
+       GROUP BY r.id
+       ORDER BY r.created_at DESC`,
+      [req.shopId, saleId]
+    );
+
+    return res.json({
+      sale: sale.rows[0],
+      returns: result.rows
+    });
+
+  } catch (error) {
+    console.error("Return history failed:", error.message);
+
+    return res.status(500).json({
+      error: "Could not load return history."
+    });
+  }
+});
 router.get("/sales", async (req, res) => {
   const pool = req.app.locals.pool;
 
