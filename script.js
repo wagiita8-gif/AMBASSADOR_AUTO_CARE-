@@ -509,7 +509,7 @@ async function loadCloudSales(silent = false) {
   qty: Number(i.qty),
   price: Number(i.price),
   cost: Number(i.cost || 0)
-}))
+}));
 
     const updatedSales = [...cloudSales, ...localOnlySales];
 
