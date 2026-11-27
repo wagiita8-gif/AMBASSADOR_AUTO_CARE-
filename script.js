@@ -2209,7 +2209,7 @@ selectedSaleCustomer = null;
   }
 }
 
-function
+
 async function editSale(id) {
   const auth = getAuth();
 
@@ -2520,7 +2520,7 @@ async function editSale(id) {
     toast(error.message || "Could not edit sale.");
   }
 }
- viewReceipt(id) {
+ function viewReceipt(id) {
   const s = db.sales.find(x => x.id === id);
 
   if (!s) {
@@ -2998,22 +2998,41 @@ function render() {
     x => x.status !== 'voided'
   ).length;
 
-  $('salesRows').innerHTML = db.sales
-    .slice().reverse().map(s => `
-      <tr>
-        <td>
-          <b>${esc(s.receipt)}</b>
-          ${s.localOnly ? '<span class="sub">Local only</span>' : ''}
-        </td>
-        <td>${new Date(s.date).toLocaleString()}</td>
-        <td>${esc(s.customerName)}</td>
-        <td>${esc(s.payment)}</td>
-        <td><span class="pill ${s.balance > 0 ? 'low' : ''}">${esc(s.status)}</span></td>
-        <td><b>${money(s.total)}</b></td>
-        <td><button class="mini" onclick="viewReceipt('${s.id}')">Receipt</button></td>
-      </tr>
-    `).join('') || emptyRow(7,'No sales yet.');
+const canEditSales = ["owner", "manager"].includes(
+  String(getAuth()?.role || "").toLowerCase()
+);
 
+$('salesRows').innerHTML = db.sales
+  .slice()
+  .reverse()
+  .map(s => `
+    <tr>
+      <td>
+        <b>${esc(s.receipt)}</b>
+        ${s.localOnly ? '<span class="sub">Local only</span>' : ''}
+      </td>
+      <td>${new Date(s.date).toLocaleString()}</td>
+      <td>${esc(s.customerName)}</td>
+      <td>${esc(s.payment)}</td>
+      <td>
+        <span class="pill ${s.balance > 0 ? 'low' : ''}">
+          ${esc(s.status)}
+        </span>
+      </td>
+      <td><b>${money(s.total)}</b></td>
+      <td>
+        <button class="mini"
+          onclick="viewReceipt('${s.id}')">
+          Receipt
+        </button>
+        ${
+          canEditSales && !s.localOnly
+            ? `<button class="mini" onclick="editSale('${s.id}')">Edit</button>`
+            : ''
+        }
+      </td>
+    </tr>
+  `).join('') || emptyRow(7, 'No sales yet.');
     $('recentSales').innerHTML = db.sales.length
     ? db.sales
         .slice()
@@ -3109,6 +3128,8 @@ function purchaseDetails(id) {
     );
   }
 }
+
+
 
 // --------------------------------------------------
 // SEARCH
