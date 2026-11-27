@@ -2346,8 +2346,29 @@ async function editSale(id) {
 
   const paymentMethod = paymentMethods[methodIndex - 1];
 
+
   // REPLACEMENT PRODUCT
-  const productOptions = db.products
+  const availableProducts = [...db.products];
+
+  // Include products recorded on this sale if missing from inventory list.
+  sale.items.forEach(item => {
+    const existing = availableProducts.some(
+      product => product.id === item.id
+    );
+
+    if (!existing && item.id) {
+      availableProducts.push({
+        id: item.id,
+        name: item.name || "Unknown product",
+        sku: item.sku || "",
+        price: Number(item.price || 0),
+        cost: Number(item.cost || 0),
+        stock: 0
+      });
+    }
+  });
+
+  const productOptions = availableProducts
     .map((product, index) =>
       `${index + 1}. ${product.name} (${product.sku || "No SKU"})`
     )
@@ -2364,13 +2385,12 @@ async function editSale(id) {
   if (
     !Number.isInteger(productIndex) ||
     productIndex < 1 ||
-    productIndex > db.products.length
+    productIndex > availableProducts.length
   ) {
     return toast("Invalid product selection.");
   }
 
-  const selectedProduct = db.products[productIndex - 1];
-
+  const selectedProduct = availableProducts[productIndex - 1];
   // SELLING PRICE
   const priceInput = prompt(
     `Selling price for ${selectedProduct.name} (KSh):`,
