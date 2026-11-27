@@ -507,7 +507,7 @@ async function loadCloudSales(silent = false) {
         sku: i.sku,
         qty: Number(i.qty),
         price: Number(i.price),
-        cost: 0
+        cost: Number(i.cost || 0)
       }))
     }));
 
@@ -596,7 +596,7 @@ async function loadCloudPurchases(silent = false) {
     if (!silent) toast('Could not load cloud purchases.');
 
     return false;
-  }
+  }      
 }
 
 async function loadCloudSupplierPayments(silent = false) {
