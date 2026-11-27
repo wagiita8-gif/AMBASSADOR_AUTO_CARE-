@@ -2317,50 +2317,80 @@ async function editSale(id) {
   // Correct existing item quantities and prices.
   const correctedItems = [];
 
-  for (const item of sale.items) {
-    const product = db.products.find(p => p.id === item.id);
 
-    if (!product) {
-      return toast(
-        `Product ${item.name} is not available in cloud inventory.`
-      );
-    }
-
-    const quantityInput = prompt(
-      `Quantity for ${item.name} (enter 0 to remove):`,
-      String(item.qty)
-    );
-
-    if (cancel(quantityInput)) return;
-
-    const quantity = Number(quantityInput);
-
-    if (!Number.isFinite(quantity) || quantity < 0) {
-      return toast("Invalid item quantity.");
-    }
-
-    if (quantity === 0) continue;
-
-    const priceInput = prompt(
-      `Selling price for ${item.name}:`,
-      String(item.price)
-    );
-
-    if (cancel(priceInput)) return;
-
-    const price = Number(priceInput);
-
-    if (!Number.isFinite(price) || price <= 0) {
-      return toast("Invalid selling price.");
-    }
-
-    correctedItems.push({
-      productId: item.id,
-      qty: quantity,
-      price
-    });
+for (const item of sale.items) {
+  if (!db.products.length) {
+    return toast("No cloud products are available.");
   }
 
+  const productOptions = db.products
+    .map((product, index) =>
+      `${index + 1}. ${product.name} (${product.sku || "No SKU"})`
+    )
+    .join("\n");
+
+  const currentIndex = db.products.findIndex(
+    product => product.id === item.id
+  );
+
+  const productInput = prompt(
+    `Choose the product for this sale item:\n\n${productOptions}`,
+    String(currentIndex >= 0 ? currentIndex + 1 : "")
+  );
+
+  if (cancel(productInput)) return;
+
+  const productIndex = Number(productInput);
+
+  if (
+    !Number.isInteger(productIndex) ||
+    productIndex < 1 ||
+    productIndex > db.products.length
+  ) {
+    return toast("Invalid product selection.");
+  }
+
+  const selectedProduct = db.products[productIndex - 1];
+
+  const quantityInput = prompt(
+    `Quantity for ${selectedProduct.name} (enter 0 to remove):`,
+    String(item.qty)
+  );
+
+  if (cancel(quantityInput)) return;
+
+  const quantity = Number(quantityInput);
+
+  if (!Number.isFinite(quantity) || quantity < 0) {
+    return toast("Invalid item quantity.");
+  }
+
+  if (quantity === 0) continue;
+
+  const defaultPrice =
+    selectedProduct.id === item.id
+      ? item.price
+      : selectedProduct.price;
+
+  const priceInput = prompt(
+    `Selling price for ${selectedProduct.name}:`,
+    String(defaultPrice)
+  );
+
+  if (cancel(priceInput)) return;
+
+  const price = Number(priceInput);
+
+  if (!Number.isFinite(price) || price <= 0) {
+    return toast("Invalid selling price.");
+  }
+
+  correctedItems.push({
+    productId: selectedProduct.id,
+    qty: quantity,
+    price
+  });
+}
   if (!correctedItems.length) {
     return toast("A sale must contain at least one product.");
   }
