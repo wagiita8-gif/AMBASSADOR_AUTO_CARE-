@@ -200,6 +200,8 @@ router.get("/customer-payments", async (req, res) => {
     reference = "",
     notes = "",
     requestId
+    router.post("/customer-payments", async (req, res) => {
+  const pool = req.app.locals.pool;
   } = req.body;
   const paymentAmount = Number(amount);
 
