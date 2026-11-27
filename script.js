@@ -2126,7 +2126,8 @@ async function completeSale() {
     $('discount').value = 0;
     $('amountPaid').value = '';
     $('saleCustomer').value = '';
-
+selectedSaleCustomerId = '';
+selectedSaleCustomer = null;
     renderCart();
 
     if (!navigator.onLine) {
