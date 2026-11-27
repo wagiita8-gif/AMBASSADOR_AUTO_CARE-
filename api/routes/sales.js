@@ -243,15 +243,19 @@ router.post("/customer-payments", async (req, res) => {
       throw new Error("Customer not found.");
         }
        const existingPaymentResult = await client.query(
-      `SELECT id, customer_id, amount, method
-       FROM customer_payments
-       WHERE shop_id = $1 AND request_id = $2`,
+       `SELECT id, customer_id, amount, method
+        FROM customer_payments
+        WHERE shop_id = $1 AND request_id = $2`,
       [req.shopId, requestId]
     );
 
     if (existingPaymentResult.rows.length) {
       const existingPayment = existingPaymentResult.rows[0];
+     if (!crypto.randomUUID) {
+    return toast('This browser cannot create a secure payment ID.');
+  }
 
+  const requestId = crypto.randomUUID();
       const allocationResult = await client.query(
         `SELECT a.sale_id AS "saleId",
                 s.receipt,
