@@ -934,11 +934,22 @@ async function productForm(id) {
 
     const name = d.name.trim();
     const sku = d.sku.trim() || makeSku(name);
+    const barcode = d.barcode.trim();
+    const category = d.category.trim();
+    const cost = Number(d.cost);
     const price = Number(d.price);
     const stock = Number(d.stock);
+    const reorder = Number(d.reorder);
 
     if (!name || !sku || !Number.isFinite(price) || price <= 0) {
       throw new Error('Enter a valid name, SKU and selling price.');
+    }
+
+    if (
+      !Number.isFinite(cost) || cost < 0 ||
+      !Number.isFinite(reorder) || reorder < 0
+    ) {
+      throw new Error('Buying price and reorder level must be valid.');
     }
 
     if (!Number.isSafeInteger(stock) || stock < 0) {
@@ -961,19 +972,28 @@ async function productForm(id) {
     let productId = id;
 
     if (id) {
-      const response = await fetch(`${url}/${id}`, {
-        method: 'PATCH',
-        headers,
-        body: JSON.stringify({
-          name,
-          sku,
-          sellingPrice: price
-        })
-      });
+      // Send ONLY fields that actually changed.
+      const changes = {};
 
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Product update failed.');
+      if (name !== p.name) changes.name = name;
+      if (sku !== p.sku) changes.sku = sku;
+      if (price !== Number(p.price)) changes.sellingPrice = price;
 
+      if (Object.keys(changes).length > 0) {
+        const response = await fetch(`${url}/${id}`, {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify(changes)
+        });
+
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.error || 'Product update failed.');
+        }
+      }
+
+      // Stock is handled separately so changing other details
+      // cannot accidentally overwrite inventory quantity.
       if (stock !== Number(p.stock)) {
         const stockResponse = await fetch(`${url}/${id}/stock-count`, {
           method: 'POST',
@@ -985,10 +1005,15 @@ async function productForm(id) {
         });
 
         const stockData = await stockResponse.json();
+
         if (!stockResponse.ok) {
-          throw new Error(stockData.error || 'Details updated, but stock update failed. Refresh before retrying.');
+          throw new Error(
+            stockData.error ||
+            'Product details were updated, but stock update failed. Refresh before retrying.'
+          );
         }
       }
+
     } else {
       const response = await fetch(url, {
         method: 'POST',
@@ -1002,37 +1027,45 @@ async function productForm(id) {
       });
 
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Product creation failed.');
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Product creation failed.');
+      }
 
       productId = data.product.id;
     }
 
+    // Preserve every existing field unless the user changed it.
     const local = {
       ...p,
       id: productId,
       name,
       sku,
-      barcode: d.barcode.trim(),
-      category: d.category.trim(),
-      cost: Number(d.cost),
+      barcode,
+      category,
+      cost,
       price,
       stock,
-      reorder: Number(d.reorder),
+      reorder,
       supplierLinks: p.supplierLinks || []
     };
 
     const index = db.products.findIndex(x => x.id === productId);
-    if (index < 0) db.products.push(local);
-    else db.products[index] = local;
+
+    if (index < 0) {
+      db.products.push(local);
+    } else {
+      db.products[index] = local;
+    }
 
     save();
 
     await loadCloudProducts(true);
     render();
-    toast(id ? 'Product updated in cloud.' : 'Product saved to cloud.');
+
+    toast(id ? 'Product updated successfully.' : 'Product saved successfully.');
   });
 }
-
 
 
 function makeSku(name) {
