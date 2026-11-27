@@ -141,7 +141,8 @@ router.get("/sales", async (req, res) => {
                'name', si.product_name,
                'sku', si.sku,
                'qty', si.quantity,
-               'price', si.unit_price
+               'price', si.unit_price,
+'cost', si.unit_cost
              )
            ) FILTER (WHERE si.id IS NOT NULL),
            '[]'
@@ -213,26 +214,30 @@ router.patch("/sales/:saleId", async (req, res) => {
 
   for (const item of items) {
     const quantity = Number(item.qty);
-    const price = Number(item.price);
-
+const price = Number(item.price);
+const cost = Number(item.cost ?? 0);
     if (
-      typeof item.productId !== "string" ||
-      !uuidPattern.test(item.productId) ||
-      !Number.isFinite(quantity) ||
-      quantity <= 0 ||
-      !Number.isFinite(price) ||
-      price <= 0
-    ) {
+  typeof item.productId !== "string" ||
+  !uuidPattern.test(item.productId) ||
+  !Number.isFinite(quantity) ||
+  quantity <= 0 ||
+  !Number.isFinite(price) ||
+  price <= 0 ||
+  !Number.isFinite(cost) ||
+  cost < 0
+)
+    {
       return res.status(400).json({
         error: "Every sale item needs a valid product, quantity and price."
       });
     }
 
     normalizedItems.push({
-      productId: item.productId,
-      quantity,
-      price
-    });
+  productId: item.productId,
+  quantity,
+  price,
+  cost
+});
   }
 
   let client;
@@ -360,10 +365,10 @@ router.patch("/sales/:saleId", async (req, res) => {
 
     for (const productId of productIds) {
       const result = await client.query(
-        `SELECT id, name, sku, quantity
+        `SELECT id, name, sku, quantity, selling_price
          FROM products
          WHERE id = $1 AND shop_id = $2
-         FOR UPDATE`,
+         FOR UPDATE`
         [productId, req.shopId]
       );
 
@@ -573,32 +578,42 @@ router.patch("/sales/:saleId", async (req, res) => {
       "DELETE FROM sale_items WHERE sale_id = $1",
       [saleId]
     );
+for (const item of normalizedItems) {
+  const product = products.get(item.productId);
 
-    for (const item of normalizedItems) {
-      const product = products.get(item.productId);
-      const lineTotal = Number(
-        (item.quantity * item.price).toFixed(2)
-      );
+  const lineTotal = Number(
+    (item.quantity * item.price).toFixed(2)
+  );
 
-      await client.query(
-        `INSERT INTO sale_items (
-          id, sale_id, product_id, product_name,
-          sku, quantity, unit_price, line_total
-        )
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-        [
-          randomUUID(),
-          saleId,
-          item.productId,
-          product.name,
-          product.sku,
-          item.quantity,
-          item.price,
-          lineTotal
-        ]
-      );
-    }
+  // Update the current inventory selling price.
+  await client.query(
+    `UPDATE products
+     SET selling_price = $1,
+         updated_at = NOW()
+     WHERE id = $2 AND shop_id = $3`,
+    [item.price, item.productId, req.shopId]
+  );
 
+  // Save the corrected historical sale price and buying cost.
+  await client.query(
+    `INSERT INTO sale_items (
+      id, sale_id, product_id, product_name,
+      sku, quantity, unit_price, unit_cost, line_total
+    )
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+    [
+      randomUUID(),
+      saleId,
+      item.productId,
+      product.name,
+      product.sku,
+      item.quantity,
+      item.price,
+      item.cost,
+      lineTotal
+    ]
+  );
+}
     const afterData = {
       sale: {
         receipt: receipt.trim(),
