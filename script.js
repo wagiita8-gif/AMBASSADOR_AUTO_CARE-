@@ -309,6 +309,9 @@ let db = load();
 let cart = [];
 let activeSaleRequestId = null;
 
+// Preserve the selected customer during cloud refreshes.
+let selectedSaleCustomerId = '';
+let selectedSaleCustomer = null;
 const titles = {
   home:'Dashboard',
   products:'Products',
