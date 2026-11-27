@@ -2210,6 +2210,7 @@ selectedSaleCustomer = null;
 }
 
 
+
 async function editSale(id) {
   const auth = getAuth();
 
@@ -2223,9 +2224,6 @@ async function editSale(id) {
     return toast("Connect to the internet before editing a sale.");
   }
 
-  
-
-  
   const sale = db.sales.find(
     item => item.id === id && item.localOnly !== true
   );
@@ -2234,23 +2232,19 @@ async function editSale(id) {
     return toast("Cloud sale not found.");
   }
 
-  // Always fetch the latest inventory before editing sale items.
   const productsLoaded = await loadCloudProducts(true);
 
-  if (!productsLoaded) {
-    return toast("Could not load inventory. Sale was not changed.");
+  if (!productsLoaded || !db.products.length) {
+    return toast("Could not load cloud inventory.");
   }
 
-  if (!db.products.length) {
-    return toast("No cloud products found. Sale was not changed.");
-  }
   if (!Array.isArray(sale.items) || !sale.items.length) {
     return toast("This sale has no editable item details.");
   }
 
   const cancel = value => value === null;
 
-  // Customer selection.
+  // CUSTOMER
   const customerOptions = [
     "0. Walk-in customer",
     ...db.customers.map(
@@ -2263,7 +2257,7 @@ async function editSale(id) {
     : 0;
 
   const customerInput = prompt(
-    `Choose the customer number:\n${customerOptions}`,
+    `Choose customer:\n${customerOptions}`,
     String(Math.max(0, currentCustomerIndex))
   );
 
@@ -2283,7 +2277,7 @@ async function editSale(id) {
     ? null
     : db.customers[customerIndex - 1].id;
 
-  // Receipt number.
+  // RECEIPT
   const receipt = prompt(
     "Receipt / invoice number:",
     sale.receipt
@@ -2295,22 +2289,14 @@ async function editSale(id) {
     return toast("Receipt number cannot be empty.");
   }
 
-  // Payment method.
-  const paymentMethods = [
-    "Cash",
-    "M-Pesa",
-    "Card",
-    "Bank",
-    "Other"
-  ];
+  // PAYMENT METHOD
+  const paymentMethods = ["Cash", "M-Pesa", "Card", "Bank", "Other"];
 
   const methodInput = prompt(
     `Payment method:\n${paymentMethods.map(
       (method, index) => `${index + 1}. ${method}`
     ).join("\n")}`,
-    String(
-      Math.max(1, paymentMethods.indexOf(sale.payment) + 1)
-    )
+    String(Math.max(1, paymentMethods.indexOf(sale.payment) + 1))
   );
 
   if (cancel(methodInput)) return;
@@ -2327,18 +2313,10 @@ async function editSale(id) {
 
   const paymentMethod = paymentMethods[methodIndex - 1];
 
-
-  
-
-
-  // Replace the existing sale product with one selected from inventory.
-  if (!db.products.length) {
-    return toast("No cloud products are available.");
-  }
-
+  // REPLACEMENT PRODUCT
   const productOptions = db.products
     .map((product, index) =>
-      `${index + 1}. ${product.name} (${product.sku || "No SKU"}) — ${money(product.price)}`
+      `${index + 1}. ${product.name} (${product.sku || "No SKU"})`
     )
     .join("\n");
 
@@ -2360,21 +2338,9 @@ async function editSale(id) {
 
   const selectedProduct = db.products[productIndex - 1];
 
-  const quantityInput = prompt(
-    `Quantity for ${selectedProduct.name}:`,
-    String(sale.items.reduce((sum, item) => sum + Number(item.qty || 0), 0))
-  );
-
-  if (cancel(quantityInput)) return;
-
-  const quantity = Number(quantityInput);
-
-  if (!Number.isFinite(quantity) || quantity <= 0) {
-    return toast("Invalid quantity.");
-  }
-
+  // SELLING PRICE
   const priceInput = prompt(
-    `Selling price for ${selectedProduct.name}:`,
+    `Selling price for ${selectedProduct.name} (KSh):`,
     String(selectedProduct.price)
   );
 
@@ -2383,14 +2349,61 @@ async function editSale(id) {
   const price = Number(priceInput);
 
   if (!Number.isFinite(price) || price <= 0) {
-    return toast("Invalid selling price.");
+    return toast("Enter a valid selling price.");
   }
 
+  // BUYING PRICE
+  const costInput = prompt(
+    `Buying price / unit cost for ${selectedProduct.name} (KSh):`,
+    String(selectedProduct.cost || 0)
+  );
+
+  if (cancel(costInput)) return;
+
+  const cost = Number(costInput);
+
+  if (!Number.isFinite(cost) || cost < 0) {
+    return toast("Enter a valid buying price.");
+  }
+
+  // QUANTITY SOLD
+  const oldQuantity = sale.items.reduce(
+    (sum, item) => sum + Number(item.qty || 0),
+    0
+  );
+
+  const quantityInput = prompt(
+    `Quantity sold for ${selectedProduct.name}:`,
+    String(oldQuantity)
+  );
+
+  if (cancel(quantityInput)) return;
+
+  const quantity = Number(quantityInput);
+
+  if (!Number.isFinite(quantity) || quantity <= 0) {
+    return toast("Enter a valid quantity sold.");
+  }
+
+  // REQUIRED REASON
+  const reason = prompt(
+    "Reason for correcting this sale:"
+  );
+
+  if (cancel(reason)) return;
+
+  if (!reason.trim()) {
+    return toast("A reason is required for the sale correction.");
+  }
+
+  // DISCOUNT
   const correctedItems = [{
     productId: selectedProduct.id,
     qty: quantity,
-    price
+    price,
+    cost
   }];
+
   const discountInput = prompt(
     "Discount amount (KSh):",
     String(sale.discount || 0)
@@ -2404,22 +2417,11 @@ async function editSale(id) {
     return toast("Invalid discount.");
   }
 
-  const reason = prompt(
-    "Reason for this correction (optional):",
-    ""
-  );
-
-  if (cancel(reason)) return;
-
-  const previewSubtotal = correctedItems.reduce(
-    (sum, item) => sum + item.qty * item.price,
-    0
-  );
-
+  const previewSubtotal = quantity * price;
   const previewTotal = previewSubtotal - discount;
 
   if (discount > previewSubtotal) {
-    return toast("Discount cannot exceed the subtotal.");
+    return toast("Discount cannot exceed subtotal.");
   }
 
   if (previewTotal < Number(sale.paid)) {
@@ -2431,11 +2433,16 @@ async function editSale(id) {
   const summary = [
     `Receipt: ${receipt.trim()}`,
     `Customer: ${customerIndex === 0 ? "Walk-in" : db.customers[customerIndex - 1].name}`,
+    `Replacement product: ${selectedProduct.name}`,
+    `Selling price: ${money(price)}`,
+    `Buying price: ${money(cost)}`,
+    `Quantity sold: ${quantity}`,
     `Subtotal: ${money(previewSubtotal)}`,
     `Discount: ${money(discount)}`,
     `New total: ${money(previewTotal)}`,
-    `Recorded paid amount (preserved): ${money(sale.paid)}`,
+    `Recorded paid amount: ${money(sale.paid)}`,
     `New balance: ${money(previewTotal - Number(sale.paid))}`,
+    `Reason: ${reason.trim()}`,
     "",
     "Save these corrections?"
   ].join("\n");
@@ -2458,7 +2465,7 @@ async function editSale(id) {
           paymentMethod,
           discount,
           items: correctedItems,
-          reason
+          reason: reason.trim()
         })
       }
     );
