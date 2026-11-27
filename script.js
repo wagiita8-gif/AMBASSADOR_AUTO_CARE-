@@ -2242,7 +2242,187 @@ selectedSaleCustomer = null;
   }
 }
 
+// --------------------------------------------------
+// SALE RETURNS
+// --------------------------------------------------
 
+async function returnSale(id) {
+  const auth = getAuth();
+
+  if (!auth || !["owner", "manager"].includes(
+    String(auth.role || "").toLowerCase()
+  )) {
+    return toast("Only the owner or manager can process returns.");
+  }
+
+  if (!navigator.onLine) {
+    return toast("Connect to the internet before processing a return.");
+  }
+
+  const sale = db.sales.find(
+    item => item.id === id && item.localOnly !== true
+  );
+
+  if (!sale) {
+    return toast("Cloud sale not found.");
+  }
+
+  if (!Array.isArray(sale.items) || !sale.items.length) {
+    return toast("This sale has no item details.");
+  }
+
+  const itemOptions = sale.items.map(item => ({
+    value: item.id,
+    label: `${item.name} — sold: ${item.qty}`
+  }));
+
+  openModal("Process sale return", [
+    {
+      name: "saleItemId",
+      label: "Product being returned",
+      type: "select",
+      options: itemOptions,
+      required: true
+    },
+    {
+      name: "quantity",
+      label: "Quantity being returned",
+      type: "number",
+      min: 0.001,
+      step: "0.001",
+      value: 1,
+      required: true
+    },
+    {
+      name: "condition",
+      label: "Item condition",
+      type: "select",
+      options: [
+        {value: "resalable", label: "Resalable — restore stock"},
+        {value: "damaged", label: "Damaged — do not restore stock"},
+        {value: "non_resalable", label: "Not resalable — do not restore stock"}
+      ],
+      required: true
+    },
+    {
+      name: "refundMethod",
+      label: "Refund method",
+      type: "select",
+      options: [
+        {value: "cash", label: "Cash"},
+        {value: "mpesa", label: "M-Pesa"},
+        {value: "card", label: "Card"},
+        {value: "bank", label: "Bank"},
+        {value: "other", label: "Other"}
+      ],
+      required: true
+    },
+    {
+      name: "reason",
+      label: "Reason for return",
+      type: "textarea",
+      placeholder: "Explain why the customer is returning this item...",
+      required: true,
+      wide: true
+    }
+  ], async d => {
+    const selectedItem = sale.items.find(
+      item => String(item.id) === String(d.saleItemId)
+    );
+
+    if (!selectedItem) {
+      throw new Error("Invalid sale item.");
+    }
+
+    const quantity = Number(d.quantity);
+
+    if (
+      !Number.isFinite(quantity) ||
+      quantity <= 0 ||
+      quantity > Number(selectedItem.qty)
+    ) {
+      throw new Error("Enter a valid return quantity.");
+    }
+
+    if (!d.reason.trim()) {
+      throw new Error("A return reason is required.");
+    }
+
+    const result = await cloudRequest(
+      `sales/${encodeURIComponent(id)}/returns`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          requestId: crypto.randomUUID(),
+          reason: d.reason.trim(),
+          refundMethod: d.refundMethod,
+          items: [
+            {
+              saleItemId: d.saleItemId,
+              quantity,
+              condition: d.condition
+            }
+          ]
+        })
+      }
+    );
+
+    await Promise.all([
+      loadCloudSales(true),
+      loadCloudProducts(true)
+    ]);
+
+    render();
+
+    toast(
+      `Return processed. Receipt: ${result.return?.receipt || "Created"}`
+    );
+  });
+}
+
+
+async function viewReturnHistory(id) {
+  if (!getAuth()) {
+    return toast("Please sign in first.");
+  }
+
+  if (!navigator.onLine) {
+    return toast("Connect to the internet to view return history.");
+  }
+
+  try {
+    const data = await cloudRequest(
+      `sales/${encodeURIComponent(id)}/returns`
+    );
+
+    if (!Array.isArray(data.returns) || !data.returns.length) {
+      return alert("No returns have been recorded for this sale.");
+    }
+
+    const history = data.returns.map(item => {
+      const products = (item.items || []).map(product =>
+        `  ${product.productName} × ${product.quantity} (${product.condition})`
+      ).join("\n");
+
+      return [
+        `Receipt: ${item.receipt}`,
+        `Date: ${new Date(item.created_at).toLocaleString()}`,
+        `Reason: ${item.reason}`,
+        `Refund method: ${item.refund_method}`,
+        `Refund amount: ${money(item.refund_amount)}`,
+        `Outstanding balance reduction: ${money(item.credit_reduction)}`,
+        "Items:",
+        products
+      ].join("\n");
+    }).join("\n\n--------------------\n\n");
+
+    alert(history);
+
+  } catch (error) {
+    console.error("Return history error:", error);
+    toast(error.message || "Could not load return history.");
+  }
+}
 
 async function editSale(id) {
   const auth = getAuth();
@@ -3059,9 +3239,14 @@ $('salesRows').innerHTML = db.sales
           onclick="viewReceipt('${s.id}')">
           Receipt
         </button>
-        ${
+        
+                ${
           canEditSales && !s.localOnly
-            ? `<button class="mini" onclick="editSale('${s.id}')">Edit</button>`
+            ? `
+              <button class="mini" onclick="editSale('${s.id}')">Edit</button>
+              <button class="mini" onclick="returnSale('${s.id}')">Return</button>
+              <button class="mini" onclick="viewReturnHistory('${s.id}')">Returns</button>
+            `
             : ''
         }
       </td>
