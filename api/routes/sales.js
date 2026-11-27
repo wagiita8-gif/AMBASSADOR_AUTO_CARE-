@@ -313,11 +313,11 @@ router.post("/customer-payments", async (req, res) => {
     const paymentId = randomUUID();
 
     await client.query(
-      `INSERT INTO customer_payments (
+            `INSERT INTO customer_payments (
         id, shop_id, customer_id, user_id,
-        amount, method, reference, notes
+        amount, method, reference, notes, request_id
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
       [
         paymentId,
         req.shopId,
@@ -326,7 +326,8 @@ router.post("/customer-payments", async (req, res) => {
         paymentCents / 100,
         method.trim(),
         reference.trim() || null,
-        notes.trim() || null
+        notes.trim() || null,
+        requestId
       ]
     );
 
