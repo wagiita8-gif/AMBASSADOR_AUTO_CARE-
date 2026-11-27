@@ -1471,7 +1471,11 @@ async function payCustomer(id) {
   if (due <= 0) {
     return toast('No outstanding customer balance.');
   }
+  if (!crypto.randomUUID) {
+    return toast('This browser cannot create a secure payment ID.');
+  }
 
+  const requestId = crypto.randomUUID();
   openModal('Receive payment — ' + customer.name, [
     {
       name: 'amount',
