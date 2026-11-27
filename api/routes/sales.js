@@ -110,6 +110,39 @@ CREATE TABLE IF NOT EXISTS sale_edit_audit (
 
 CREATE INDEX IF NOT EXISTS idx_sale_edit_audit_sale
   ON sale_edit_audit(shop_id, sale_id, edited_at DESC);
+      CREATE TABLE IF NOT EXISTS sale_returns (
+      id UUID PRIMARY KEY,
+      shop_id UUID NOT NULL REFERENCES shops(id),
+      sale_id UUID NOT NULL REFERENCES sales(id),
+      receipt TEXT NOT NULL,
+      created_by UUID NOT NULL REFERENCES users(id),
+      request_id UUID NOT NULL,
+      reason TEXT NOT NULL,
+      refund_method TEXT NOT NULL,
+      refund_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+      credit_reduction NUMERIC(12,2) NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(shop_id, request_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS sale_return_items (
+      id UUID PRIMARY KEY,
+      return_id UUID NOT NULL REFERENCES sale_returns(id),
+      sale_item_id UUID NOT NULL REFERENCES sale_items(id),
+      product_id UUID NOT NULL REFERENCES products(id),
+      product_name TEXT NOT NULL,
+      sku TEXT NOT NULL,
+      quantity NUMERIC(12,3) NOT NULL CHECK (quantity > 0),
+      item_condition TEXT NOT NULL,
+      unit_refund NUMERIC(12,2) NOT NULL,
+      line_total NUMERIC(12,2) NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_sale_returns_sale
+      ON sale_returns(shop_id, sale_id, created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_sale_return_items_return
+      ON sale_return_items(return_id);
     CREATE INDEX IF NOT EXISTS idx_sales_shop_date
       ON sales(shop_id, created_at DESC);
 
