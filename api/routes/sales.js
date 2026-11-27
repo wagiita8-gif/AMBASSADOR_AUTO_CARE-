@@ -80,6 +80,13 @@ async function initializeSalesTables(pool) {
       notes TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+    ALTER TABLE customer_payments
+  ADD COLUMN IF NOT EXISTS request_id UUID;
+
+CREATE UNIQUE INDEX IF NOT EXISTS
+  idx_customer_payments_shop_request_id
+  ON customer_payments(shop_id, request_id)
+  WHERE request_id IS NOT NULL;
 
     CREATE TABLE IF NOT EXISTS customer_payment_allocations (
       payment_id UUID NOT NULL REFERENCES customer_payments(id)
