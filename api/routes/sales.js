@@ -159,7 +159,360 @@ CREATE INDEX IF NOT EXISTS idx_sale_edit_audit_sale
       ON customer_payment_allocations(sale_id);
   `);
 }
+router.post("/sales/:saleId/returns", async (req, res) => {
+  if (!["owner", "manager"].includes(req.shopRole)) {
+    return res.status(403).json({
+      error: "Only the owner or manager can process returns."
+    });
+  }
 
+  const pool = req.app.locals.pool;
+  const { saleId } = req.params;
+  const {
+    requestId,
+    reason,
+    refundMethod,
+    items
+  } = req.body || {};
+
+  const uuidPattern =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+  const allowedMethods = [
+    "cash", "mpesa", "card", "bank", "other"
+  ];
+
+  if (
+    !uuidPattern.test(saleId) ||
+    !uuidPattern.test(requestId || "") ||
+    typeof reason !== "string" ||
+    !reason.trim() ||
+    reason.trim().length > 500 ||
+    !allowedMethods.includes(refundMethod) ||
+    !Array.isArray(items) ||
+    items.length === 0 ||
+    items.length > 100
+  ) {
+    return res.status(400).json({
+      error: "Invalid return details."
+    });
+  }
+
+  const seenItems = new Set();
+
+  for (const item of items) {
+    if (
+      !uuidPattern.test(item.saleItemId || "") ||
+      seenItems.has(item.saleItemId) ||
+      !Number.isFinite(Number(item.quantity)) ||
+      Number(item.quantity) <= 0 ||
+      !["resalable", "damaged", "non_resalable"].includes(item.condition)
+    ) {
+      return res.status(400).json({
+        error: "Invalid returned item details."
+      });
+    }
+
+    seenItems.add(item.saleItemId);
+  }
+
+  const client = await pool.connect();
+  let transactionStarted = false;
+
+  try {
+    await client.query("BEGIN");
+    transactionStarted = true;
+
+    const existing = await client.query(
+      `SELECT id, receipt
+       FROM sale_returns
+       WHERE shop_id = $1 AND request_id = $2`,
+      [req.shopId, requestId]
+    );
+
+    if (existing.rows.length) {
+      await client.query("COMMIT");
+      transactionStarted = false;
+
+      return res.json({
+        message: "Return already processed.",
+        return: existing.rows[0]
+      });
+    }
+
+    const saleResult = await client.query(
+      `SELECT *
+       FROM sales
+       WHERE id = $1 AND shop_id = $2
+       FOR UPDATE`,
+      [saleId, req.shopId]
+    );
+
+    if (!saleResult.rows.length) {
+      throw new Error("Sale not found.");
+    }
+
+    const sale = saleResult.rows[0];
+
+    if (Number(sale.total) <= 0) {
+      throw new Error("This sale has no remaining value to return.");
+    }
+
+    const returnId = randomUUID();
+    const returnReceipt =
+      `RET-${randomUUID().slice(0, 8).toUpperCase()}`;
+
+    let returnTotalCents = 0;
+    const processedItems = [];
+
+    for (const requested of items) {
+      const itemResult = await client.query(
+        `SELECT *
+         FROM sale_items
+         WHERE id = $1 AND sale_id = $2
+         FOR UPDATE`,
+        [requested.saleItemId, saleId]
+      );
+
+      if (!itemResult.rows.length) {
+        throw new Error("A returned item does not belong to this sale.");
+      }
+
+      const soldItem = itemResult.rows[0];
+      const soldQuantity = Number(soldItem.quantity);
+      const returnQuantity = Number(requested.quantity);
+
+      const previousResult = await client.query(
+        `SELECT COALESCE(SUM(quantity), 0) AS returned
+         FROM sale_return_items
+         WHERE sale_item_id = $1`,
+        [soldItem.id]
+      );
+
+      const previouslyReturned =
+        Number(previousResult.rows[0].returned);
+
+      if (
+        previouslyReturned + returnQuantity >
+        soldQuantity + 0.000001
+      ) {
+        throw new Error(
+          `Return quantity exceeds the quantity sold for ${soldItem.product_name}.`
+        );
+      }
+
+      const subtotal = Number(sale.subtotal);
+
+      if (subtotal <= 0) {
+        throw new Error("Sale subtotal is invalid.");
+      }
+
+      const effectiveUnitPrice =
+        Number(soldItem.line_total) *
+        (Number(sale.total) / subtotal) /
+        soldQuantity;
+
+      const lineRefundCents = Math.round(
+        effectiveUnitPrice * returnQuantity * 100
+      );
+
+      returnTotalCents += lineRefundCents;
+
+      const productResult = await client.query(
+        `SELECT id
+         FROM products
+         WHERE id = $1 AND shop_id = $2
+         FOR UPDATE`,
+        [soldItem.product_id, req.shopId]
+      );
+
+      if (!productResult.rows.length) {
+        throw new Error("A returned product could not be found.");
+      }
+
+      if (requested.condition === "resalable") {
+        await client.query(
+          `UPDATE products
+           SET quantity = quantity + $1,
+               updated_at = NOW()
+           WHERE id = $2 AND shop_id = $3`,
+          [returnQuantity, soldItem.product_id, req.shopId]
+        );
+
+        await client.query(
+          `INSERT INTO stock_movements (
+            shop_id, product_id, user_id,
+            movement_type, quantity, unit_price, notes
+          )
+          VALUES ($1, $2, $3, 'sale_return', $4, $5, $6)`,
+          [
+            req.shopId,
+            soldItem.product_id,
+            req.user.userId,
+            returnQuantity,
+            Number(soldItem.unit_price),
+            `Return ${returnReceipt}: ${requested.condition}`
+          ]
+        );
+      }
+
+      processedItems.push({
+        id: randomUUID(),
+        saleItemId: soldItem.id,
+        productId: soldItem.product_id,
+        productName: soldItem.product_name,
+        sku: soldItem.sku,
+        quantity: returnQuantity,
+        condition: requested.condition,
+        unitRefund: Number(
+          (effectiveUnitPrice).toFixed(2)
+        ),
+        lineTotal: lineRefundCents / 100
+      });
+    }
+
+    const oldTotalCents = Math.round(Number(sale.total) * 100);
+    const oldBalanceCents = Math.round(Number(sale.balance) * 100);
+
+    if (
+      returnTotalCents <= 0 ||
+      returnTotalCents > oldTotalCents
+    ) {
+      throw new Error("Calculated refund amount is invalid.");
+    }
+
+    const creditReductionCents = Math.min(
+      returnTotalCents,
+      oldBalanceCents
+    );
+
+    const refundCents =
+      returnTotalCents - creditReductionCents;
+
+    const newTotalCents =
+      oldTotalCents - returnTotalCents;
+
+    const newBalanceCents =
+      oldBalanceCents - creditReductionCents;
+
+    const newPaidCents =
+      Math.max(0, newTotalCents - newBalanceCents);
+
+    const newStatus =
+      newBalanceCents === 0
+        ? newPaidCents === 0
+          ? "refunded"
+          : "completed"
+        : newPaidCents === 0
+          ? "credit"
+          : "partial";
+
+    await client.query(
+      `INSERT INTO sale_returns (
+        id, shop_id, sale_id, receipt,
+        created_by, request_id, reason,
+        refund_method, refund_amount, credit_reduction
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [
+        returnId,
+        req.shopId,
+        saleId,
+        returnReceipt,
+        req.user.userId,
+        requestId,
+        reason.trim(),
+        refundMethod,
+        refundCents / 100,
+        creditReductionCents / 100
+      ]
+    );
+
+    for (const item of processedItems) {
+      await client.query(
+        `INSERT INTO sale_return_items (
+          id, return_id, sale_item_id, product_id,
+          product_name, sku, quantity, item_condition,
+          unit_refund, line_total
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+        [
+          item.id,
+          returnId,
+          item.saleItemId,
+          item.productId,
+          item.productName,
+          item.sku,
+          item.quantity,
+          item.condition,
+          item.unitRefund,
+          item.lineTotal
+        ]
+      );
+    }
+
+    await client.query(
+      `UPDATE sales
+       SET total = $1,
+           paid = $2,
+           balance = $3,
+           status = $4
+       WHERE id = $5 AND shop_id = $6`,
+      [
+        newTotalCents / 100,
+        newPaidCents / 100,
+        newBalanceCents / 100,
+        newStatus,
+        saleId,
+        req.shopId
+      ]
+    );
+
+    await client.query("COMMIT");
+    transactionStarted = false;
+
+    return res.status(201).json({
+      message: "Return processed successfully.",
+      return: {
+        id: returnId,
+        receipt: returnReceipt,
+        saleId,
+        refundMethod,
+        refundAmount: refundCents / 100,
+        creditReduction: creditReductionCents / 100,
+        items: processedItems
+      },
+      sale: {
+        total: newTotalCents / 100,
+        paid: newPaidCents / 100,
+        balance: newBalanceCents / 100,
+        status: newStatus
+      }
+    });
+
+  } catch (error) {
+    if (transactionStarted) {
+      await client.query("ROLLBACK").catch(() => {});
+    }
+
+    console.error("Sale return failed:", error.message);
+
+    return res.status(
+      error.message.includes("not found") ||
+      error.message.includes("exceeds") ||
+      error.message.includes("invalid") ||
+      error.message.includes("belong") ||
+      error.message.includes("no remaining") ||
+      error.message.includes("quantity") 
+        ? 400 : 500
+    ).json({
+      error: error.message || "Could not process return."
+    });
+
+  } finally {
+    client.release();
+  }
+});
 router.get("/sales", async (req, res) => {
   const pool = req.app.locals.pool;
 
