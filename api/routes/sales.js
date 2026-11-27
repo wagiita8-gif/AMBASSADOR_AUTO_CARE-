@@ -68,7 +68,9 @@ async function initializeSalesTables(pool) {
 
     ALTER TABLE sale_items
       ALTER COLUMN line_total SET NOT NULL;
-
+ALTER TABLE sale_items
+  ADD COLUMN IF NOT EXISTS unit_cost NUMERIC(12,2)
+  NOT NULL DEFAULT 0;
     CREATE TABLE IF NOT EXISTS customer_payments (
       id UUID PRIMARY KEY,
       shop_id UUID NOT NULL REFERENCES shops(id),
